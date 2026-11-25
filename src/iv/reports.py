@@ -217,7 +217,7 @@ def report_arbitrage(out_dir: Path) -> dict:
                 itm = np.where(x["type"] == "CE", x["strike"] < x["F"], x["strike"] > x["F"])
                 x = x.assign(itm=itm)
                 res["  in the money among those (1,000+ contracts, over Rs 1)"] = ", ".join(
-                    f"{c} {g['itm'].mean():.0%}" for c, g in x.groupby("check")
+                    f"{c} {g['itm'].mean():.1%}" for c, g in x.groupby("check")
                     if c in ("spread", "butterfly")
                 )
             if otm and mc == 1000:
