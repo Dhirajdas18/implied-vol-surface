@@ -260,7 +260,13 @@ def report_arbitrage(out_dir: Path) -> dict:
     d = d.join(qb, on=["date", "expiry"])
     d["qb"] = d["qb"].fillna(0) > 0
     res["  fit flagged when its own quotes broke a butterfly by over Rs 1 / when they didn't"] = (
-        f"{d.loc[d['qb'], 'butterfly'].mean():.1%} / {d.loc[~d['qb'], 'butterfly'].mean():.1%}"
+        f"all {d.loc[d['qb'], 'butterfly'].mean():.1%} / "
+        f"{d.loc[~d['qb'], 'butterfly'].mean():.1%}; "
+        "within maturity: " + "; ".join(
+            f"{k} {gg.loc[gg['qb'], 'butterfly'].mean():.1%} / "
+            f"{gg.loc[~gg['qb'], 'butterfly'].mean():.1%}"
+            for k, gg in d.groupby(pd.cut(d["days"], MATURITY_BINS, labels=MATURITY_LABELS),
+                                   observed=True))
     )
 
     flagged = d[d["butterfly"]]
@@ -504,7 +510,7 @@ def report_dynamics(out_dir: Path) -> dict:
     tr, te = ch[ch.index.year <= 2020], ch[ch.index.year >= 2021]
     s1, l1, _ = dy.pca(tr)
     s2, l2, _ = dy.pca(te)
-    x2 = te.to_numpy() - te.to_numpy().mean(axis=0)
+    x2 = te.to_numpy() - tr.to_numpy().mean(axis=0)  # centred on the training mean
     tot = (x2**2).sum()
     oos = [1 - ((x2 - x2 @ l1[:, :n] @ l1[:, :n].T) ** 2).sum() / tot for n in (1, 2, 3)]
     res["  2015-2020 components on 2021-2026 changes (share explained, 1/2/3 components)"] = (
@@ -630,6 +636,24 @@ def report_forecast(out_dir: Path) -> dict:
     return res
 
 
+def _stock_prices(sl: pd.DataFrame, lake: Path) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Slices with symbols mapped to current NSE symbols, the split-adjusted close of every
+    symbol found in the archive, and a note on what is left unpriced."""
+    from iv import stocks
+
+    sl = stocks.map_symbols(sl, stocks.current_symbols(lake / "_ref" / "symbolchange.csv"))
+    p = pd.read_parquet(lake / "panel.parquet", columns=["date", "symbol", "adj_close"])
+    p = p[p["symbol"].isin(sl["symbol"].unique())]
+    px = p.pivot_table(index="date", columns="symbol", values="adj_close")
+    miss = sorted(set(sl["symbol"]) - set(px.columns))
+    months = sl.drop_duplicates(["date", "symbol"])
+    lost = months["symbol"].isin(miss).mean()
+    note = (f"after mapping renamed symbols to current ones, {len(miss)} of "
+            f"{sl['symbol'].nunique()} symbols ({lost:.1%} of stock month-ends) have no prices "
+            f"in the archive and are left out: {', '.join(miss)}")
+    return sl, px, note
+
+
 def report_stocks(out_dir: Path) -> dict:
     """Stock option smiles against NIFTY's at each month-end 2015-2026 (SVI on the stock's
     expiries 15-60 days out), and each stock's at-the-money implied variance as a forecast of its
@@ -683,9 +707,8 @@ def report_stocks(out_dir: Path) -> dict:
     if not lake:
         res["forecast"] = "skipped: IV_LAKE_DIR not set"
         return res
-    p = pd.read_parquet(Path(lake) / "panel.parquet", columns=["date", "symbol", "adj_close"])
-    p = p[p["symbol"].isin(sl["symbol"].unique())]
-    px = p.pivot_table(index="date", columns="symbol", values="adj_close")
+    sl, px, note = _stock_prices(sl, Path(lake))
+    res["unpriced"] = note
     lr = np.log(px).diff()
     g = stocks.gjr_common({c: 100 * lr[c].dropna() for c in lr})
     d = stocks.forecast_table(sl, lr, g)
@@ -837,9 +860,8 @@ def report_predict(out_dir: Path) -> dict:
     with ProcessPoolExecutor(workers) as ex:
         sl = pd.DataFrame([r for rr in ex.map(stocks.fit_date, so.groupby("date"), chunksize=2)
                            for r in rr])
-    p = pd.read_parquet(Path(lake) / "panel.parquet", columns=["date", "symbol", "adj_close"])
-    p = p[p["symbol"].isin(sl["symbol"].unique())]
-    px = p.pivot_table(index="date", columns="symbol", values="adj_close")
+    sl, px, note = _stock_prices(sl, Path(lake))
+    res["unpriced"] = note
     d = pr.stock_signals(sl, np.log(px).diff(), px)
     res["stock-months"] = (
         f"{len(d):,} on {d['date'].nunique()} month-ends ({d.groupby('date').size().median():.0f} "
@@ -862,7 +884,7 @@ def report_predict(out_dir: Path) -> dict:
         )
     order = sorted(pv, key=pv.get)
     m = len(order)
-    passed = [sg for i, sg in enumerate(order) if pv[sg] <= 0.05 * (i + 1) / m]
+    passed = pr.bh_pass(pv)
     res["  Benjamini-Hochberg at 5% across the four"] = (
         ", ".join(f"{names[sg]} p {pv[sg]:.3f} (needs {0.05 * (i + 1) / m:.4f})"
                   for i, sg in enumerate(order))

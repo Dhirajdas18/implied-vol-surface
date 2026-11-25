@@ -1,7 +1,7 @@
 [project]
 name = "implied-vol-surface"
 version = "0.1.0"
-description = "The NIFTY implied volatility surface from NSE's daily option bhavcopy, 2015-2026: forwards, SVI fits per expiry, no-arbitrage checks, with a live surface lab."
+description = "The NIFTY implied volatility surface from NSE's daily option bhavcopy, 2015-2026: SVI fits, no-arbitrage checks, risk-neutral tails, surface dynamics, volatility forecasts, stock smiles and predictability tests, with a live surface lab."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Dhirajdas18" }]

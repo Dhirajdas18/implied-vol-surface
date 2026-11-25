@@ -45,8 +45,9 @@ black-scholes-pricer, not NSE’s settlement prices. Only options that traded th
 used, out of the money against the forward (puts below it, calls above), priced above the
 ₹0.05 tick, with 2 to 365 days to expiry.</li>
 <li>Forward: for each expiry, from put-call parity, F = K + e<sup>rT</sup>(C − P), the median
-over the five traded strikes nearest the futures price; where fewer than three strikes traded on
-both sides, the futures settlement price. Rate r = {100 * d["rate"]:.1f}% a year, constant, used
+over the five traded strikes nearest the futures price (for weekly expiries, which have no future,
+nearest the strike where call and put prices are closest); where fewer than three strikes traded
+on both sides, the futures settlement price. Rate r = {100 * d["rate"]:.1f}% a year, constant, used
 only for discounting. Time to expiry is calendar days / 365.</li>
 <li>Implied volatility: Black-76 on the forward, solved with a bracketed Newton method. SVI
 (Gatheral’s raw form) is fitted per expiry with at least five quotes by bounded least squares,

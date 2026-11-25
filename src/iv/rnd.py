@@ -5,7 +5,8 @@ For x = ln(S_T / F) (the move from the forward to the price at expiry), with tot
 from the slice and d2 = -k / sqrt(w) - sqrt(w) / 2 (Black-76 with the smile):
 - cdf: Q(x < k) = N(-d2) + n(d2) w'(k) / (2 sqrt(w))  (the price of a digital put, undiscounted);
 - pdf: g(k) / sqrt(2 pi w) exp(-d2^2 / 2), Gatheral's g (iv.surface.svi_g), so g >= 0 is needed
-  for a density (slices flagged in iv/02 are refitted with the no-butterfly penalty first).
+  for a density (slices flagged for butterfly arbitrage are refitted with the no-butterfly
+  penalty first).
 The flat alternative uses the at-the-money total variance at every strike: x ~ N(-w0/2, w0).
 
 `origins` picks one slice per monthly expiry, the one closest to `target` days before it (within

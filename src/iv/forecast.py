@@ -58,7 +58,8 @@ def garch_paths(r_pct: pd.Series, horizons=HORIZONS, years=range(2015, 2027)) ->
     for y in years:
         start = pd.Timestamp(y, 1, 1)
         upto = r_pct.loc[: pd.Timestamp(y, 12, 31)]
-        if (upto.index < start).sum() < 500 or (upto.index >= start).sum() == 0:
+        # 450: the archive's NIFTY starts in Feb 2013, 460 returns before 2015
+        if (upto.index < start).sum() < 450 or (upto.index >= start).sum() == 0:
             continue
         am = arch_model(upto, mean="Constant", vol="GARCH", p=1, o=1, q=1, dist="t")
         first = upto.index[upto.index >= start][0]

@@ -4,8 +4,8 @@
 [![Surface lab](https://github.com/Dhirajdas18/implied-vol-surface/actions/workflows/pages.yml/badge.svg)](https://dhirajdas18.github.io/implied-vol-surface/)
 
 The NIFTY implied volatility surface, every strike and expiry on every trading day from 2015 to
-2026, built from NSE's daily F&O bhavcopy, with stock option surfaces to follow. Only derived
-results (fitted parameters and summaries) are committed; the raw NSE data stays local.
+2026, built from NSE's daily F&O bhavcopy, with every stock's option smile at month-ends. Only
+derived results (fitted parameters and summaries) are committed; the raw NSE data stays local.
 
 **Live surface lab: [dhirajdas18.github.io/implied-vol-surface](https://dhirajdas18.github.io/implied-vol-surface/)**,
 pick a date and an expiry and see the 3D surface you can turn, every expiry's smile, the chosen one against the market, the term
@@ -78,10 +78,12 @@ a breach here is not a trade anyone could have made.
 - **Liquid out-of-the-money prices were nearly clean.** With every leg out of the money and at
   1,000+ contracts, 1.63% of butterflies broke by over ₹1 and 0.07% by over ₹5 (median breach
   ₹0.10, two ticks); order, spread and calendar breaches were 0.02% or less.
-- **SVI's breaches were the formula's, not the market's.** 7.1% of fitted slices had butterfly
+- **SVI's breaches were mostly on weekly expiries.** 7.1% of fitted slices had butterfly
   arbitrage somewhere in their quoted range, 33.7% of expiries up to 7 days against 0.8% beyond
-  120; 4.5% had calendar arbitrage against the expiry before (6.1% at 8–35 days). Slices whose own
-  quotes broke a butterfly by over ₹1 were flagged less often (4.6%) than the rest (11.9%).
+  120; 4.5% had calendar arbitrage against the expiry before (6.1% at 8–35 days). Within each
+  maturity, slices whose own quotes broke a butterfly by over ₹1 were flagged about as often as the
+  rest or less (up to 7 days 30.8% against 34.2%; 8–35 days 6.6% against 14.7%; 36–120 days 1.9%
+  against 0.3%; beyond 120 days 0.8% against 0.9%).
 - **A penalty fixed most of them cheaply.** Refitting the 1,309 flagged slices with a penalty on
   negative g(k) made 94% arbitrage-free (97% of weekly ones); the fit error rose from 0.73 to 0.79
   vol points at the median (90th percentile rise 0.43).
@@ -105,14 +107,14 @@ protection, so they need not match real frequencies.
   months (17); over 3%, 20.4% against 19.7%. Over 10% was priced at 3.0% and happened twice (1.4%,
   90% interval 0.3–4.4%).
 - **Rises came a little more often than priced, within chance.** Over 3%: 22.6% priced, 28.2%
-  happened (p 0.13); over 5%: 10.4% against 14.8% (p 0.10). The average move from the forward was
+  happened (p 0.13 against the average priced chance); over 5%: 10.4% against 14.8% (p 0.10). The average move from the forward was
   +0.22% a month.
 - **Outcomes spread evenly across the priced range.** Each tenth of the priced distribution should
   catch 14.2 months; the counts ran from 10 to 21 (most in the top tenth), which is within chance
   (chi-square p 0.49).
 - **The size of moves matched, except for 2020.** Realised moves had a root mean square of 5.16%
-  a month against 4.64% priced at the money; leaving out February–April 2020 (−31.3% from 25
-  February), 4.34% against 4.36%.
+  a month against 4.64% priced at the money; leaving out the forecasts made in February–April 2020
+  (−31.3% from 25 February), 4.34% against 4.36%.
 - **The smile beat a flat volatility only slightly.** Its log score was +0.145 a month higher than
   a lognormal at the at-the-money volatility (t 1.06, better in 56% of months).
 
@@ -142,10 +144,10 @@ changes) give the principal components.
   best slide on 64% of days and 79% of big-move days.
 - **One move explained most of each day's change.** The whole surface rising or falling together
   was 86% of the variance (correlation −0.59 with NIFTY's move); short against long dated 6.8%; the
-  downside against the upside 2.9%. Components found on 2015–2020 explained 89% of 2021–2026's
-  changes, against 93% for 2021–2026's own.
+  downside against the upside 2.9%. The three components found on 2015–2020 explained 89% of
+  2021–2026's changes, against 93% for 2021–2026's own three (one component: 79% against 80%).
 
-### 5. At-the-money implied volatility forecast NIFTY's real volatility best, a week to three months ahead
+### 5. At-the-money implied volatility forecast NIFTY's real volatility best a week and a month ahead, and level with GARCH at three months
 
 <a href="docs/img/forecast.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/forecast.png"><img src="docs/img/forecast.gif" alt="Forecast loss against the 20-day variance for at-the-money implied, full-smile implied, GJR-GARCH and EWMA over the next 5, 21 and 63 trading days, 2021-2026" width="720"></picture></a>
 
@@ -158,19 +160,20 @@ whole quoted smile by the variance-swap formula VIX uses (2∫OTM(K)/K² dK). Th
 VIX (21 days only), GJR-GARCH with Student-t shocks refitted each January on NIFTY since 2013,
 EWMA (0.94), and the 20-day variance as the baseline. Scores are QLIKE on 2021–2026 (1,245 to
 1,433 overlapping windows a horizon, Newey-West t-statistics); scaling factors and the
-implied-plus-GARCH blend are fitted on 2015–2020.
+implied-plus-GARCH blend are fitted on 2015–2020 (only 591 five-day windows there, mostly from 2019
+on, since a 7-day expiry to interpolate from was rare before weekly options).
 
 - **Implied at the money was best at every horizon.** Its loss was 33%, 50% and 53% below the
   20-day variance's at 5, 21 and 63 days; GJR-GARCH's was 11%, 28% and 47%. Implied beat GARCH at
   5 and 21 days (t −2.2 and −2.1), not clearly at 63 (t −0.6).
 - **At the money was almost unbiased; the whole smile was not.** Averaged over 2015–2026, at-the-
-  money implied variance was 0.97–1.06 times what followed; the full-smile figure 1.11–1.28 and
-  India VIX 1.21. Scaled down by its 2015–2020 ratio, VIX scored −48.7% at 21 days, level with at
+  money implied variance was 0.96–1.06 times what followed; the full-smile figure 1.09–1.28 and
+  India VIX 1.21. Scaled down by its 2015–2020 ratio, VIX scored −49.1% at 21 days, level with at
   the money (−50.4%).
 - **The full-smile figure is India VIX.** Computed from the SVI smile across quoted strikes, it was
   0.99 times VIX at the median, correlation 0.997.
-- **Adding GARCH didn't help.** A blend fitted on 2015–2020 (0.64 × implied + 0.38 × GARCH in logs
-  at 21 days) scored worse than implied alone on 2021–2026 at every horizon (t +1.7 to +2.5).
+- **Adding GARCH didn't help.** A blend fitted on 2015–2020 (0.59 × implied + 0.39 × GARCH in logs
+  at 21 days) scored worse than implied alone on 2021–2026 at every horizon (t +1.7 to +2.4).
 
 ### 6. Stock smiles were nearly flat, unlike NIFTY's, and a stock's own options forecast its volatility better than GARCH
 
@@ -185,8 +188,11 @@ future for 16% of slices): 27,260 slices, 376 stocks, a median 182 a month-end (
 the slice nearest 30 days gives at-the-money implied variance for the next 21 trading days (stock
 prices from the archive, split-adjusted), against GJR with Student-t shocks and common parameters
 set each January from data before it (garch-volatility's choice for stocks), EWMA and the 20-day
-variance: 19,876 stock-months, 334 stocks, 2016–2026 (GJR needs three years of returns); QLIKE,
-Newey-West t-statistics on monthly cross-sectional means.
+variance: 21,123 stock-months, 340 stocks, 2016–2026 (GJR needs three years of returns); QLIKE,
+Newey-West t-statistics on monthly cross-sectional means. Option symbols are mapped to the
+company's current symbol (NSE's symbol-change list) before prices are looked up; 5 of 354 symbols
+(0.3% of stock month-ends) still have no prices and are left out (ANANDRATHI, HONAUT, JKCEMENT,
+SOUTHBANK, UNITECH). Up to two missing days in a window are allowed, its sum scaled to 21 days.
 
 - **Stock smiles were almost flat.** The median at-the-money slope was −0.027 for stocks and −0.375
   for NIFTY on the same date and expiry; a stock's skew was steeper than NIFTY's in 6% of pairs,
@@ -194,14 +200,14 @@ Newey-West t-statistics on monthly cross-sectional means.
   −0.08 against −2.76; the 25-delta risk reversal −0.24 against −2.03 vol points.
 - **Stocks were far more volatile but priced less steeply.** At-the-money implied volatility had a
   median of 32.5% for stocks against 13.7% for NIFTY.
-- **A stock's own options beat GARCH.** At-the-money implied variance's loss was 46.6% below the
-  20-day variance's, GJR's 34.2% and EWMA's 21.1%; implied beat GJR in 69% of month-ends (t −2.6),
+- **A stock's own options beat GARCH.** At-the-money implied variance's loss was 46.8% below the
+  20-day variance's, GJR's 34.1% and EWMA's 20.6%; implied beat GJR in 69% of month-ends (t −2.7),
   74% in 2021–2026.
 - **It held for thinly and heavily traded options alike.** Splitting each month-end's stocks into
-  thirds by option contracts traded, implied scored −49.2%, −45.6% and −45.0%; GJR −41.9%, −34.8%
-  and −25.7%.
+  thirds by option contracts traded, implied scored −49.1%, −46.0% and −45.0%; GJR −41.7%, −34.4%
+  and −25.6%.
 - **Stock implied variance ran higher than what followed.** On average 1.12 times realised (GJR
-  1.03), against 1.03 for NIFTY's at-the-money variance over 21 days (finding 5).
+  1.02), against 1.03 for NIFTY's at-the-money variance over 21 days (finding 5).
 
 ### 7. The surface warned of next month's volatility, not its direction; no stock option signal ranked returns reliably
 
@@ -214,7 +220,8 @@ constant-maturity surface gives the at-the-money level, the skew (minus its slop
 the term structure (60-day minus 30-day at-the-money vol) and the premium (implied variance minus
 the last 21 days' realised); each is rank-correlated with the next 21 trading days' volatility,
 worst fall from the start, return and falls over 5%, alone and after removing India VIX. For
-stocks, at each month-end (22,686 stock-months, a median 166 stocks), the slice nearest 30 days
+stocks, at each month-end (24,211 stock-months, a median 180 stocks; symbols mapped as in finding
+6), the slice nearest 30 days
 gives skew, the 25-delta risk reversal, implied minus the last 21 days' realised volatility and
 implied volatility; each month's rank correlation with the return to the next month-end (IC) is
 averaged, with the top-minus-bottom fifth. No parameters are fitted, so nothing is tuned on the
@@ -227,12 +234,12 @@ test months, but four stock signals are tested, so their p-values are judged wit
   correlations with next month's volatility were −0.00, −0.08 and −0.13. In the 21 months when
   60-day vol sat over a point below 30-day, next month's volatility had a median of 19.4%
   against 11.7%, and the worst fall −5.2% against −1.6%, which VIX already said.
-- **No stock signal survived the multiple-test check.** Implied vol (IC −0.043, p 0.034) and the
-  risk reversal (−0.019, p 0.040) came closest; Benjamini-Hochberg needed 0.0125 and 0.025. Skew
-  (+0.011) and implied minus realised (−0.009) were further off. Top-minus-bottom fifths ran from
-  −0.61% to +0.17% a month, none with |t| above 1.4.
-- **The near-misses faded.** Implied vol's IC was −0.072 in 2015–2020 and −0.012 in 2021–2026; the
-  risk reversal's −0.028 and −0.009. Recent realised volatility alone scored −0.032 (t −1.94).
+- **No stock signal survived the multiple-test check.** The risk reversal (IC −0.018, p 0.042) and
+  implied vol (−0.039, p 0.048) came closest; Benjamini-Hochberg needed 0.0125 and 0.025. Skew
+  (+0.011) and implied minus realised (−0.007) were further off. Top-minus-bottom fifths ran from
+  −0.48% to +0.15% a month, none with |t| above 1.6.
+- **The near-misses faded.** Implied vol's IC was −0.064 in 2015–2020 and −0.013 in 2021–2026; the
+  risk reversal's −0.026 and −0.009. Recent realised volatility alone scored −0.029 (t −1.78).
 
 ## Quick start
 

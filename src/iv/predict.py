@@ -94,3 +94,13 @@ def quintile_spread(d: pd.DataFrame, signal: str, target: str = "ret") -> pd.Ser
         q = pd.qcut(g[signal].rank(method="first"), 5, labels=False)
         return g.loc[q == 4, target].mean() - g.loc[q == 0, target].mean()
     return d.groupby("date").apply(one, include_groups=False).dropna()
+
+
+def bh_pass(pvals: dict[str, float], alpha: float = 0.05) -> list[str]:
+    """Benjamini-Hochberg step-up: the names whose adjusted p-value is at most `alpha` (every
+    hypothesis up to the largest rank i with p(i) <= alpha i / m)."""
+    from scipy.stats import false_discovery_control
+
+    names = list(pvals)
+    adj = false_discovery_control([pvals[n] for n in names])
+    return [n for n, a in zip(names, adj, strict=True) if a <= alpha]

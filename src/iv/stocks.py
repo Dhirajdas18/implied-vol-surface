@@ -6,9 +6,13 @@ at least MIN_QUOTES traded out-of-the-money quotes get an SVI fit, with the forw
 put-call parity or, failing that, the stock future's settlement price (as for NIFTY). NSE stock
 options are European.
 
-Forecast baseline from garch-volatility (its QL-145 rule): GJR with Student-t shocks, common
+Forecast baseline, garch-volatility's choice for stocks: GJR with Student-t shocks, common
 parameters (the median alpha, gamma, beta of every sound per-stock fit on data before January)
 variance-targeted to each stock's own history, refitted each January.
+
+Option symbols are mapped to the company's current NSE symbol (`current_symbols`, from NSE's
+symbol-change list) before prices are looked up, since the price archive files a company's whole
+history under its latest symbol.
 """
 
 import numpy as np
@@ -19,6 +23,36 @@ from iv.shape import atm_slope
 
 MIN_QUOTES = 5
 DAYS = (15, 60)
+
+
+def current_symbols(symbol_change_csv) -> dict[str, str]:
+    """Old symbol -> the latest symbol, following chains (TATATEA -> TATAGLOBAL -> TATACONSUM),
+    from NSE's symbol-change list (columns OLD SYMBOL, NEW SYMBOL, EFFECTIVE DATE)."""
+    ch = pd.read_csv(symbol_change_csv)
+    ch.columns = [c.strip().upper() for c in ch.columns]
+    ch["date"] = pd.to_datetime(ch["EFFECTIVE DATE"].str.strip(), format="%d-%b-%Y",
+                                errors="coerce")
+    step = {}
+    for r in ch.sort_values("date").itertuples(index=False):
+        old, new = str(r[1]).strip(), str(r[2]).strip()
+        if old and new and old != new:
+            step[old] = new
+    out = {}
+    for old in step:
+        cur, seen = old, set()
+        while cur in step and cur not in seen:
+            seen.add(cur)
+            cur = step[cur]
+        out[old] = cur
+    return out
+
+
+def map_symbols(slices: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
+    """Slices with each symbol replaced by its current one; where an old and a new symbol trade
+    on the same date and expiry (around a change), the slice with more contracts is kept."""
+    out = slices.assign(symbol=slices["symbol"].replace(mapping))
+    return (out.sort_values("contracts", ascending=False)
+            .drop_duplicates(["date", "symbol", "expiry"]).sort_index())
 
 
 def fit_date(args) -> list[dict]:
@@ -111,9 +145,10 @@ def gjr_common(r_pct: dict[str, pd.Series], years=range(2015, 2027), min_obs: in
 def forecast_table(slices: pd.DataFrame, log_ret: pd.DataFrame, garch: pd.DataFrame,
                    horizon: int = 21) -> pd.DataFrame:
     """One row per month-end and stock: realised total variance of the next `horizon` returns
-    (at most 2 missing days, counted as 0) and forecasts of it: the slice closest to 30 days
-    (at-the-money variance x calendar days spanned / 365), the 20-day and EWMA (0.94) variances
-    x horizon, and the GJR common-parameter forecast. Needs 250 past returns."""
+    (at most 2 missing days; the sum is scaled up by horizon / days present) and forecasts of
+    it: the slice closest to 30 days (at-the-money variance x calendar days spanned / 365),
+    the 20-day and EWMA (0.94) variances x horizon, and the GJR common-parameter forecast.
+    Needs 250 past returns."""
     one = (slices.assign(gap=(slices["days"] - 30).abs()).sort_values("gap")
            .groupby(["date", "symbol"]).head(1))
     idx = log_ret.index
@@ -132,7 +167,7 @@ def forecast_table(slices: pd.DataFrame, log_ret: pd.DataFrame, garch: pd.DataFr
             continue
         D = (idx[i + horizon] - r.date).days
         rows.append({"date": r.date, "symbol": r.symbol,
-                     "realised": float((fut.fillna(0) ** 2).sum()),
+                     "realised": float((fut**2).sum() * horizon / fut.notna().sum()),
                      "atm": r.atm_vol**2 * D / 365,
                      "hist20": float((past.iloc[-20:] ** 2).mean()) * horizon,
                      "ewma": float(ewma[r.symbol].iloc[i]) * horizon,
