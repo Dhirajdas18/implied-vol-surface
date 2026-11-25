@@ -18,7 +18,7 @@ studies are rerun locally.
 - [x] No-arbitrage checks on quotes and fits
 - [x] Risk-neutral densities and tail probabilities against realised moves
 - [x] Surface dynamics: sticky strike against sticky delta, principal components
-- [ ] Forecasting realised volatility: implied by maturity against GARCH and India VIX
+- [x] Forecasting realised volatility: implied by maturity against GARCH and India VIX
 - [ ] Stock option surfaces against NIFTY
 - [ ] Does the skew or term structure predict returns or crashes
 
@@ -145,6 +145,33 @@ changes) give the principal components.
   downside against the upside 2.9%. Components found on 2015–2020 explained 89% of 2021–2026's
   changes, against 93% for 2021–2026's own.
 
+### 5. At-the-money implied volatility forecast NIFTY's real volatility best, a week to three months ahead
+
+<a href="docs/img/forecast.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/forecast.png"><img src="docs/img/forecast.gif" alt="Forecast loss against the 20-day variance for at-the-money implied, full-smile implied, GJR-GARCH and EWMA over the next 5, 21 and 63 trading days, 2021-2026" width="720"></picture></a>
+
+<a href="docs/img/forecast_path.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/forecast_path.png"><img src="docs/img/forecast_path.gif" alt="NIFTY's volatility over the next 21 trading days against the at-the-money implied volatility a month ahead, at each month-end" width="720"></picture></a>
+
+From each day's close, every forecast is compared as total variance over the next 5, 21 or 63
+trading days, against the sum of those days' squared log returns. Implied variance is
+interpolated to exactly the calendar days the window spans: at the money (k = 0), and over the
+whole quoted smile by the variance-swap formula VIX uses (2∫OTM(K)/K² dK). The others are India
+VIX (21 days only), GJR-GARCH with Student-t shocks refitted each January on NIFTY since 2013,
+EWMA (0.94), and the 20-day variance as the baseline. Scores are QLIKE on 2021–2026 (1,245 to
+1,433 overlapping windows a horizon, Newey-West t-statistics); scaling factors and the
+implied-plus-GARCH blend are fitted on 2015–2020.
+
+- **Implied at the money was best at every horizon.** Its loss was 33%, 50% and 53% below the
+  20-day variance's at 5, 21 and 63 days; GJR-GARCH's was 11%, 28% and 47%. Implied beat GARCH at
+  5 and 21 days (t −2.2 and −2.1), not clearly at 63 (t −0.6).
+- **At the money was almost unbiased; the whole smile was not.** Averaged over 2015–2026, at-the-
+  money implied variance was 0.97–1.06 times what followed; the full-smile figure 1.11–1.28 and
+  India VIX 1.21. Scaled down by its 2015–2020 ratio, VIX scored −48.7% at 21 days, level with at
+  the money (−50.4%).
+- **The full-smile figure is India VIX.** Computed from the SVI smile across quoted strikes, it was
+  0.99 times VIX at the median, correlation 0.997.
+- **Adding GARCH didn't help.** A blend fitted on 2015–2020 (0.64 × implied + 0.38 × GARCH in logs
+  at 21 days) scored worse than implied alone on 2021–2026 at every horizon (t +1.7 to +2.5).
+
 ## Quick start
 
 ```bash
@@ -154,7 +181,7 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
-                                         # (topics: surface, arbitrage, tails, dynamics)
+                                         # (topics: surface, arbitrage, tails, dynamics, forecast)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -190,6 +217,9 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
 - `src/iv/dynamics.py`: the constant-maturity surface (total variance interpolated in time), the
   next-day test of sticky-moneyness, sticky-strike, slide and same-shape rules, and principal
   components of daily changes.
+- `src/iv/forecast.py`: realised-variance targets over 5, 21 and 63 trading days, implied forecasts
+  matched to each window's calendar days (at the money and the VIX-method variance swap), GJR-GARCH
+  refitted each January with `arch`, QLIKE and Newey-West t-statistics.
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.

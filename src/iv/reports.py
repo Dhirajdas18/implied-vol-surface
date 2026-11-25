@@ -537,9 +537,103 @@ def report_dynamics(out_dir: Path) -> dict:
     return res
 
 
+def report_forecast(out_dir: Path) -> dict:
+    """Forecasting NIFTY's realised variance over the next 5, 21 and 63 trading days from each
+    day's close, 2015-2026: at-the-money and full-smile implied variance from the surface, India
+    VIX (21 days), GJR-GARCH-t refitted each January, EWMA, against the 20-day variance, by QLIKE.
+    Scaling factors and the implied+GARCH blend are fitted on 2015-2020; scores are on 2021-2026.
+    Needs IV_LAKE_DIR for India VIX."""
+    from iv import forecast as fc
+    from iv.data import SVI_DAILY
+
+    res = {}
+    d = fc.build(pd.read_parquet(SVI_DAILY), nifty_close(), india_vix())
+    v21 = d[d["h"] == 21].dropna(subset=["vix", "varswap"])
+    res["full-smile implied against India VIX (21 days)"] = (
+        f"ratio median {(v21['varswap'] / v21['vix']).median():.2f}, correlation "
+        f"{v21[['varswap', 'vix']].corr().iloc[0, 1]:.3f} ({len(v21):,} days)"
+    )
+    names = {"atm": "at-the-money implied", "varswap": "full-smile implied (VIX method)",
+             "vix": "India VIX", "garch": "GJR-GARCH", "ewma": "EWMA"}
+    chart = {}
+    for h, g in d.groupby("h"):
+        cols = ["atm", "varswap", "garch", "hist20", "ewma"] + (["vix"] if h == 21 else [])
+        g = g.dropna(subset=cols).set_index("date")
+        tr, te = g[g.index.year <= 2020], g[g.index.year >= 2021]
+        ratio = {c: g[c].mean() / g["realised"].mean() for c in cols if c != "hist20"}
+        res[f"{h} days: windows (2015-2020 / 2021-2026)"] = (
+            f"{len(tr):,} / {len(te):,}; average forecast / average realised (all years): "
+            + ", ".join(f"{names[c]} {v:.2f}" for c, v in ratio.items())
+        )
+        base = fc.qlike(te["realised"], te["hist20"])
+        loss = {c: fc.qlike(te["realised"], te[c]) for c in cols if c != "hist20"}
+        for c in [c for c in cols if c not in ("hist20", "atm", "ewma")]:
+            k = tr["realised"].mean() / tr[c].mean()
+            loss[f"{c}_scaled"] = fc.qlike(te["realised"], te[c] * k)
+        x = np.column_stack([np.ones(len(tr)), np.log(tr["atm"]), np.log(tr["garch"])])
+        y = np.log(np.maximum(tr["realised"], 1e-10))
+        b = np.linalg.lstsq(x, y, rcond=None)[0]
+        adj = float(np.exp(y - x @ b).mean())
+        blend = np.exp(b[0] + b[1] * np.log(te["atm"]) + b[2] * np.log(te["garch"])) * adj
+        loss["blend"] = fc.qlike(te["realised"], blend)
+        rel = {c: (v.mean() / base.mean() - 1, fc.nw_t(v - base, h)) for c, v in loss.items()}
+        chart[h] = rel
+        blend_name = f"blend {b[1]:.2f} x implied + {b[2]:.2f} x GARCH (logs)"
+        labels = {c: blend_name if c == "blend" else names[c.replace("_scaled", "")]
+                  + (" scaled" if c.endswith("_scaled") else "") for c in rel}
+        res[f"{h} days: QLIKE against the 20-day variance, 2021-2026"] = "; ".join(
+            f"{labels[c]} {v:+.1%} (t {t:.1f})" for c, (v, t) in rel.items())
+        res[f"  {h} days: implied against GARCH / blend against implied"] = (
+            f"t {fc.nw_t(loss['atm'] - loss['garch'], h):.1f} / "
+            f"t {fc.nw_t(loss['blend'] - loss['atm'], h):.1f} (negative: the first is better)"
+        )
+
+    fig, ax = plt.subplots(figsize=(10, 4.7))
+    show = [("atm", "at-the-money implied", plots.SERIES[0]),
+            ("varswap", "full-smile implied (VIX method)", plots.BLUE_RAMP[2]),
+            ("garch", "GJR-GARCH", plots.SERIES[1]), ("ewma", "EWMA", plots.MUTED)]
+    hs = sorted(chart)
+    xs = np.arange(len(hs))
+    wd = 0.2
+    for j, (c, lab, col) in enumerate(show):
+        vals = [100 * chart[h][c][0] for h in hs]
+        ax.bar(xs + (j - 1.5) * wd, vals, wd, color=col, label=lab)
+        for xx, y in zip(xs + (j - 1.5) * wd, vals, strict=True):
+            ax.text(xx, y - 1.2, f"{y:.0f}%", ha="center", va="top", fontsize=8.5,
+                    color=plots.TEXT)
+    ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+    ax.set_xticks(xs, [f"next {h} trading days" for h in hs])
+    ax.set_ylabel("forecast loss against the\n20-day variance, % (2021-2026)")
+    ax.set_ylim(top=5)
+    ax.legend(fontsize=8.5, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4)
+    ax.set_title("At-the-money implied volatility forecast NIFTY's real volatility best")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "forecast")
+    plt.close(fig)
+
+    m = d[d["h"] == 21].dropna(subset=["atm"]).set_index("date")
+    me = m.groupby([m.index.year, m.index.month]).tail(1)
+    ann = lambda v: 100 * np.sqrt(v * 365 / me["D"])  # noqa: E731
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    ax.plot(me.index, ann(me["realised"]), color=plots.SERIES[1], lw=1.6)
+    ax.plot(me.index, ann(me["atm"]), color=plots.SERIES[0], lw=1.6)
+    last_r, last_a = float(ann(me["realised"]).iloc[-1]), float(ann(me["atm"]).iloc[-1])
+    up, dn = (5, -5) if last_a >= last_r else (-5, 5)  # keep the two end labels apart
+    plots.label_line_end(ax, me.index[-1], last_r + dn, "what happened", plots.SERIES[1])
+    plots.label_line_end(ax, me.index[-1], last_a + up, "implied a month ahead", plots.SERIES[0])
+    ax.set_ylabel("NIFTY volatility over\nthe next 21 trading days, %")
+    ax.set_title("Implied volatility tracked the next month's real volatility, but not 2020's jump")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "forecast_path")
+    plt.close(fig)
+    res["month-ends in the path chart"] = f"{len(me)}"
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
     "arbitrage": report_arbitrage,
     "tails": report_tails,
     "dynamics": report_dynamics,
+    "forecast": report_forecast,
 }
