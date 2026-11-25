@@ -183,6 +183,128 @@ def report_surface(out_dir: Path) -> dict:
     return res
 
 
+def report_arbitrage(out_dir: Path) -> dict:
+    """Static arbitrage, 2015-2026: model-free checks on every day's NIFTY option closes (order,
+    spread, butterfly across strikes; calendar across expiries) by how thinly the legs traded and
+    for all strikes against out-of-the-money only; then the SVI fits' butterfly and calendar flags
+    by maturity, and a refit of every butterfly-flagged slice with a penalty on negative g."""
+    from iv import arb
+    from iv.build import OPTION_COLS
+    from iv.data import NIFTY_OPTIONS, SVI_DAILY
+
+    res = {}
+    opts = pd.read_parquet(NIFTY_OPTIONS, columns=OPTION_COLS)
+    workers = max(1, (os.cpu_count() or 2) - 1)
+    rate = {}
+    for otm in (False, True):
+        for mc in (1, 100, 1000):
+            jobs = ((d, g, mc, otm) for d, g in opts.groupby("date"))
+            with ProcessPoolExecutor(workers) as ex:
+                out = list(ex.map(arb.quote_checks_day, jobs, chunksize=8))
+            v = pd.concat([o[0] for o in out])
+            tests = pd.concat([o[1] for o in out]).groupby("check")["tests"].sum()
+            r1 = (v[v["amount"] > 1].groupby("check").size() / tests).fillna(0)
+            r5 = (v[v["amount"] > 5].groupby("check").size() / tests).fillna(0)
+            rate[(otm, mc)] = r1
+            label = f"{'out-of-the-money' if otm else 'all traded'} strikes, {mc}+ contracts"
+            res[f"breaches over Rs 1 (over Rs 5), {label}"] = ", ".join(
+                f"{c} {r1.get(c, 0):.2%} ({r5.get(c, 0):.2%})"
+                for c in ("order", "spread", "butterfly", "calendar")
+            ) + f"; {int(tests.sum()):,} comparisons"
+            if not otm and mc == 1000:
+                fwd = pd.read_parquet(SVI_DAILY, columns=["date", "expiry", "F"])
+                x = v[v["amount"] > 1].merge(fwd, on=["date", "expiry"], how="left")
+                itm = np.where(x["type"] == "CE", x["strike"] < x["F"], x["strike"] > x["F"])
+                x = x.assign(itm=itm)
+                res["  in the money among those (1,000+ contracts, over Rs 1)"] = ", ".join(
+                    f"{c} {g['itm'].mean():.0%}" for c, g in x.groupby("check")
+                    if c in ("spread", "butterfly")
+                )
+            if otm and mc == 1000:
+                b = v[(v["check"] == "butterfly") & (v["amount"] > 0)]["amount"]
+                res["  liquid out-of-the-money butterfly breaches, size"] = (
+                    f"median Rs {b.median():.2f}, 90th percentile Rs {b.quantile(0.9):.2f}"
+                )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    xs = np.arange(3)
+    for j, (otm, lab, col) in enumerate(((False, "all traded strikes", plots.MUTED),
+                                         (True, "out of the money only", plots.SERIES[0]))):
+        vals = [100 * rate[(otm, mc)].get("butterfly", 0) for mc in (1, 100, 1000)]
+        ax.bar(xs + (j - 0.5) * 0.38, vals, 0.38, color=col, label=lab)
+        for x, y in zip(xs + (j - 0.5) * 0.38, vals, strict=True):
+            ax.text(x, y + 0.3, f"{y:.1f}%", ha="center", va="bottom", fontsize=9,
+                    color=plots.TEXT)
+    ax.set_xticks(xs, ["every leg traded", "every leg 100+ contracts", "every leg 1,000+"])
+    ax.set_ylabel("butterflies priced below zero\nby over Rs 1, % of checks")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.set_title("Closing prices broke the butterfly rule mostly where an option barely traded")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "quote_arbitrage")
+    plt.close(fig)
+
+    d = svi_table()
+    bins = pd.cut(d["days"], MATURITY_BINS, labels=MATURITY_LABELS)
+    g = d.groupby(bins, observed=True)
+    res["SVI fits flagged (butterfly, calendar)"] = (
+        f"{d['butterfly'].mean():.1%}, {d['calendar'].mean():.1%} of {len(d):,} slices; "
+        "by maturity "
+        + "; ".join(f"{k} {g['butterfly'].mean()[k]:.1%}, {g['calendar'].mean()[k]:.1%}"
+                    for k in g.groups)
+    )
+    jobs = ((dt, gg, 1, True) for dt, gg in opts.groupby("date"))
+    with ProcessPoolExecutor(workers) as ex:
+        v_otm = pd.concat([o[0] for o in ex.map(arb.quote_checks_day, jobs, chunksize=8)])
+    qb = (v_otm[(v_otm["check"] == "butterfly") & (v_otm["amount"] > 1)]
+          .groupby(["date", "expiry"]).size().rename("qb"))
+    d = d.join(qb, on=["date", "expiry"])
+    d["qb"] = d["qb"].fillna(0) > 0
+    res["  fit flagged when its own quotes broke a butterfly by over Rs 1 / when they didn't"] = (
+        f"{d.loc[d['qb'], 'butterfly'].mean():.1%} / {d.loc[~d['qb'], 'butterfly'].mean():.1%}"
+    )
+
+    flagged = d[d["butterfly"]]
+    fl = {dt: {r.expiry: {p: getattr(r, p) for p in s.PARAMS} for r in gg.itertuples()}
+          for dt, gg in flagged.groupby("date")}
+    sub = opts[opts["date"].isin(fl)]
+    with ProcessPoolExecutor(workers) as ex:
+        h = pd.DataFrame([r for rr in ex.map(arb.refit_day,
+                                             ((dt, gg, fl[dt]) for dt, gg in sub.groupby("date")),
+                                             chunksize=4) for r in rr])
+    inc = h["rmse_after"] - h["rmse_before"]
+    hb = pd.cut(h["days"], MATURITY_BINS, labels=MATURITY_LABELS)
+    res["penalty refit of butterfly-flagged slices"] = (
+        f"{len(h):,} slices; arbitrage-free after the refit {h['fixed'].mean():.0%}; fit error "
+        f"median {h['rmse_before'].median():.2f} -> {h['rmse_after'].median():.2f} vol points "
+        f"(median rise {inc.median():.3f}, 90th percentile {inc.quantile(0.9):.2f})"
+    )
+    res["  fixed by maturity"] = ", ".join(
+        f"{k} {v:.0%}" for k, v in h.groupby(hb, observed=True)["fixed"].mean().items()
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    before = g["butterfly"].mean() * 100
+    fixed = h.groupby(hb, observed=True)["fixed"].mean().reindex(before.index).fillna(0)
+    after = before * (1 - fixed)
+    xs = np.arange(len(before))
+    for j, (vals, lab, col) in enumerate(((before, "SVI fit", plots.MUTED),
+                                          (after, "refit with the no-butterfly penalty",
+                                           plots.SERIES[0]))):
+        ax.bar(xs + (j - 0.5) * 0.38, vals, 0.38, color=col, label=lab)
+        for x, y in zip(xs + (j - 0.5) * 0.38, vals, strict=True):
+            ax.text(x, y + 0.4, f"{y:.1f}%", ha="center", va="bottom", fontsize=9,
+                    color=plots.TEXT)
+    ax.set_xticks(xs, list(before.index))
+    ax.set_ylabel("slices with butterfly arbitrage, %")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.set_title("A third of weekly-expiry fits broke the butterfly rule; a penalty removed most")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "svi_arbitrage")
+    plt.close(fig)
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
+    "arbitrage": report_arbitrage,
 }

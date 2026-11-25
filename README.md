@@ -15,7 +15,7 @@ studies are rerun locally.
 ## Features
 
 - [x] Building the surface: forwards, out-of-the-money quotes, SVI per expiry
-- [ ] No-arbitrage checks on quotes and fits
+- [x] No-arbitrage checks on quotes and fits
 - [ ] Risk-neutral densities and tail probabilities against realised moves
 - [ ] Surface dynamics: sticky strike against sticky delta, principal components
 - [ ] Forecasting realised volatility: implied by maturity against GARCH and India VIX
@@ -55,6 +55,38 @@ quote (a strike between quotes) or the two lowest and two highest strikes (beyon
   strikes, was above 30-day at-the-money volatility on 97% of days, by a median 1.38 points
   (correlation 0.987).
 
+### 2. Closing prices broke no-arbitrage rules mostly where options barely traded; SVI broke them mostly on weekly expiries
+
+<a href="docs/img/quote_arbitrage.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/quote_arbitrage.png"><img src="docs/img/quote_arbitrage.gif" alt="Share of butterfly checks priced below zero by over Rs 1, for all traded strikes and out-of-the-money strikes only, by how many contracts every leg traded" width="720"></picture></a>
+
+<a href="docs/img/svi_arbitrage.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/svi_arbitrage.png"><img src="docs/img/svi_arbitrage.gif" alt="Share of SVI slices with butterfly arbitrage by maturity, before and after a refit with a penalty on negative g" width="720"></picture></a>
+
+Four model-free rules on every day's closing prices, one expiry at a time, calls and puts
+separately: a call can't cost more than a call at a lower strike (order); a call spread can't cost
+more than its discounted width (spread); the middle price of three neighbouring strikes can't sit
+above the straight line between the outer two (butterfly); and, across consecutive expiries, the
+forward-normalised price at the same strike/forward can't fall with maturity (calendar; the longer
+expiry is interpolated linearly, so this count is a lower bound). A breach is counted when it is
+over ₹1 a unit. Each comparison carries the fewest contracts traded among its legs. Closing prices
+are last trades at different times, not simultaneous quotes, and the bhavcopy has no bid or ask, so
+a breach here is not a trade anyone could have made.
+
+- **Most breaches came from thin or in-the-money strikes.** On all traded strikes, 20.8% of
+  butterflies and 9.2% of spreads broke the rule by over ₹1. With every leg at 1,000+ contracts
+  this fell to 3.7% and 0.75%, and every remaining spread breach was in the money (63% of the
+  butterflies), where a close taken at another moment of the day moves almost rupee for rupee
+  with NIFTY.
+- **Liquid out-of-the-money prices were nearly clean.** With every leg out of the money and at
+  1,000+ contracts, 1.63% of butterflies broke by over ₹1 and 0.07% by over ₹5 (median breach
+  ₹0.10, two ticks); order, spread and calendar breaches were 0.02% or less.
+- **SVI's breaches were the formula's, not the market's.** 7.1% of fitted slices had butterfly
+  arbitrage somewhere in their quoted range, 33.7% of expiries up to 7 days against 0.8% beyond
+  120; 4.5% had calendar arbitrage against the expiry before (6.1% at 8–35 days). Slices whose own
+  quotes broke a butterfly by over ₹1 were flagged less often (4.6%) than the rest (11.9%).
+- **A penalty fixed most of them cheaply.** Refitting the 1,309 flagged slices with a penalty on
+  negative g(k) made 94% arbitrage-free (97% of weekly ones); the fit error rose from 0.73 to 0.79
+  vol points at the median (90th percentile rise 0.43).
+
 ## Quick start
 
 ```bash
@@ -64,6 +96,7 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
+                                         # (topics: surface, arbitrage)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -90,6 +123,9 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
   against Python through Node to 1e-9.
 - `src/iv/shape.py`: the hold-out test (SVI, a quadratic and straight lines on held-out quotes),
   the at-the-money skew from SVI parameters and the 30- and 90-day at-the-money volatility.
+- `src/iv/arb.py`: the model-free order, spread, butterfly and calendar checks on closing prices
+  (with a liquidity floor and an out-of-the-money-only mode), and the SVI refit with a penalty on
+  negative g(k).
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.
