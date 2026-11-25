@@ -20,7 +20,7 @@ studies are rerun locally.
 - [x] Surface dynamics: sticky strike against sticky delta, principal components
 - [x] Forecasting realised volatility: implied by maturity against GARCH and India VIX
 - [x] Stock option surfaces against NIFTY
-- [ ] Does the skew or term structure predict returns or crashes
+- [x] Does the skew or term structure predict returns or crashes
 
 ## Findings
 
@@ -203,6 +203,37 @@ Newey-West t-statistics on monthly cross-sectional means.
 - **Stock implied variance ran higher than what followed.** On average 1.12 times realised (GJR
   1.03), against 1.03 for NIFTY's at-the-money variance over 21 days (finding 5).
 
+### 7. The surface warned of next month's volatility, not its direction; no stock option signal ranked returns reliably
+
+<a href="docs/img/predict_nifty.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/predict_nifty.png"><img src="docs/img/predict_nifty.gif" alt="Rank correlation of NIFTY surface signals and India VIX with the next month's volatility, worst fall and return, with a two-standard-error band" width="720"></picture></a>
+
+<a href="docs/img/predict_stocks.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/predict_stocks.png"><img src="docs/img/predict_stocks.gif" alt="Average monthly rank correlation of four stock option signals with the next month's return, by half and overall with error bars" width="720"></picture></a>
+
+At each NIFTY month-end with a surface (135, January 2015 to September 2026), the 30-day
+constant-maturity surface gives the at-the-money level, the skew (minus its slope at the money),
+the term structure (60-day minus 30-day at-the-money vol) and the premium (implied variance minus
+the last 21 days' realised); each is rank-correlated with the next 21 trading days' volatility,
+worst fall from the start, return and falls over 5%, alone and after removing India VIX. For
+stocks, at each month-end (22,686 stock-months, a median 166 stocks), the slice nearest 30 days
+gives skew, the 25-delta risk reversal, implied minus the last 21 days' realised volatility and
+implied volatility; each month's rank correlation with the return to the next month-end (IC) is
+averaged, with the top-minus-bottom fifth. No parameters are fitted, so nothing is tuned on the
+test months, but four stock signals are tested, so their p-values are judged with Benjamini-Hochberg.
+
+- **Level and VIX forecast volatility, not returns.** Their rank correlation with next month's
+  volatility was 0.68 and 0.69; with its return 0.12 and 0.11, and with falls over 5% −0.03 and
+  −0.01, inside two standard errors (±0.17).
+- **Skew, term structure and the premium added nothing beyond VIX.** After removing VIX, their
+  correlations with next month's volatility were −0.00, −0.08 and −0.13. In the 21 months when
+  60-day vol sat over a point below 30-day, next month's volatility had a median of 19.4%
+  against 11.7%, and the worst fall −5.2% against −1.6%, which VIX already said.
+- **No stock signal survived the multiple-test check.** Implied vol (IC −0.043, p 0.034) and the
+  risk reversal (−0.019, p 0.040) came closest; Benjamini-Hochberg needed 0.0125 and 0.025. Skew
+  (+0.011) and implied minus realised (−0.009) were further off. Top-minus-bottom fifths ran from
+  −0.61% to +0.17% a month, none with |t| above 1.4.
+- **The near-misses faded.** Implied vol's IC was −0.072 in 2015–2020 and −0.012 in 2021–2026; the
+  risk reversal's −0.028 and −0.009. Recent realised volatility alone scored −0.032 (t −1.94).
+
 ## Quick start
 
 ```bash
@@ -212,7 +243,8 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
-                                         # (topics: surface, arbitrage, tails, dynamics, forecast, stocks)
+                                         # (topics: surface, arbitrage, tails, dynamics, forecast, stocks,
+                                         #  predict)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -253,6 +285,8 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
   refitted each January with `arch`, QLIKE and Newey-West t-statistics.
 - `src/iv/stocks.py`: month-end SVI slices for every stock with options, GJR with common
   parameters refitted each January (variance-targeted per stock), and the stock forecast table.
+- `src/iv/predict.py`: NIFTY month-end signals and next-month outcomes, stock signals and
+  next-month returns, monthly rank correlations and top-minus-bottom fifths.
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.

@@ -756,6 +756,145 @@ def report_stocks(out_dir: Path) -> dict:
     return res
 
 
+def _partial_rank(d: pd.DataFrame, x: str, y: str, given: str) -> float:
+    rk = d[[x, y, given]].rank()
+    g = np.column_stack([np.ones(len(rk)), rk[given].to_numpy()])
+
+    def resid(v):
+        return v - g @ np.linalg.lstsq(g, v, rcond=None)[0]
+
+    return float(np.corrcoef(resid(rk[x].to_numpy()), resid(rk[y].to_numpy()))[0, 1])
+
+
+def report_predict(out_dir: Path) -> dict:
+    """Do the surface's shapes predict? NIFTY at each month-end 2015-2026: rank correlations of
+    level, skew, term structure, implied-minus-realised premium and India VIX with the next 21
+    trading days' volatility, worst fall, return and falls over 5%, and what each adds beyond VIX.
+    Stocks at each month-end: monthly rank correlation (IC) of skew, risk reversal, implied minus
+    realised vol and implied vol with the return to the next month-end, top-minus-bottom fifth,
+    halves, and Benjamini-Hochberg across the four. Needs IV_LAKE_DIR."""
+    from scipy.stats import spearmanr, ttest_1samp
+
+    from iv import predict as pr
+    from iv import stocks
+    from iv.data import STOCK_OPTIONS
+
+    res = {}
+    n = pr.nifty_signals(svi_table(), nifty_close(), india_vix())
+    nn = n.dropna()
+    sigs = ["level", "vix", "skew", "term", "premium"]
+    outs = ["vol", "worst", "ret", "fall5"]
+    corr = {(sg, o): spearmanr(nn[sg], nn[o]).statistic for sg in sigs for o in outs}
+    res["NIFTY month-ends"] = (
+        f"{len(nn)} ({nn.index.min():%b %Y}-{nn.index.max():%b %Y}); a rank correlation beyond "
+        f"+-{2 / np.sqrt(len(nn)):.2f} is about two standard errors"
+    )
+    for sg in sigs:
+        key = f"  {sg}: rank correlation with next month's vol / worst fall / return / fall >5%"
+        res[key] = (
+            " / ".join(f"{corr[(sg, o)]:+.2f}" for o in outs)
+            + ("" if sg == "vix" else "; beyond VIX: " + " / ".join(
+                f"{_partial_rank(nn, sg, o, 'vix'):+.2f}" for o in outs[:3]))
+        )
+    inv = nn["term"] < -0.01
+    res["  months with 60-day vol over 1 point below 30-day"] = (
+        f"{int(inv.sum())}: next month's vol median {nn.loc[inv, 'vol'].median():.1%} against "
+        f"{nn.loc[~inv, 'vol'].median():.1%}, worst fall {nn.loc[inv, 'worst'].median():.1%} "
+        f"against "
+        f"{nn.loc[~inv, 'worst'].median():.1%}, return {nn.loc[inv, 'ret'].mean():+.2%} against "
+        f"{nn.loc[~inv, 'ret'].mean():+.2%}"
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    lab = {"level": "30-day at-the-money vol", "vix": "India VIX", "skew": "skew",
+           "term": "term (60 - 30 days)", "premium": "implied - recent realised"}
+    show = [("vol", "next month's volatility", plots.SERIES[0]),
+            ("worst", "next month's worst fall", plots.SERIES[1]),
+            ("ret", "next month's return", plots.MUTED)]
+    xs = np.arange(len(sigs))
+    band = 2 / np.sqrt(len(nn))
+    ax.axhspan(-band, band, color=plots.GRID, zorder=0)
+    for j, (o, name, col) in enumerate(show):
+        vals = [corr[(sg, o)] for sg in sigs]
+        ax.bar(xs + (j - 1) * 0.26, vals, 0.26, color=col, label=name)
+    ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+    ax.text(len(sigs) - 0.5, band + 0.02, "within +-2 standard errors (shaded)", ha="right",
+            fontsize=8.5, color=plots.TEXT_2)
+    ax.set_xticks(xs, [lab[sg] for sg in sigs])
+    ax.set_ylabel(f"rank correlation\n({len(nn)} month-ends)")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.set_title("The surface warned of next month's volatility, not of its return")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "predict_nifty")
+    plt.close(fig)
+
+    lake = os.environ.get("IV_LAKE_DIR")
+    if not lake:
+        res["stocks"] = "skipped: IV_LAKE_DIR not set"
+        return res
+    so = pd.read_parquet(STOCK_OPTIONS)
+    workers = max(1, (os.cpu_count() or 2) - 1)
+    with ProcessPoolExecutor(workers) as ex:
+        sl = pd.DataFrame([r for rr in ex.map(stocks.fit_date, so.groupby("date"), chunksize=2)
+                           for r in rr])
+    p = pd.read_parquet(Path(lake) / "panel.parquet", columns=["date", "symbol", "adj_close"])
+    p = p[p["symbol"].isin(sl["symbol"].unique())]
+    px = p.pivot_table(index="date", columns="symbol", values="adj_close")
+    d = pr.stock_signals(sl, np.log(px).diff(), px)
+    res["stock-months"] = (
+        f"{len(d):,} on {d['date'].nunique()} month-ends ({d.groupby('date').size().median():.0f} "
+        f"stocks a month-end)"
+    )
+    names = {"skew": "skew (dearer puts)", "rr25": "risk reversal (dearer calls)",
+             "gap": "implied minus recent realised vol", "level": "implied vol"}
+    pv, halves = {}, {}
+    for sg in names:
+        ic = pr.rank_ic(d, sg)
+        qs = pr.quintile_spread(d, sg)
+        pv[sg] = ttest_1samp(ic, 0).pvalue
+        h1, h2 = ic[ic.index.year <= 2020], ic[ic.index.year >= 2021]
+        halves[sg] = (h1.mean(), h2.mean(), ic.mean(), ic.std() / np.sqrt(len(ic)))
+        res[f"  {names[sg]}"] = (
+            f"IC {ic.mean():+.4f} (t {ic.mean() / ic.std() * np.sqrt(len(ic)):.2f}, p "
+            f"{pv[sg]:.3f}; 2015-2020 {h1.mean():+.4f}, 2021-2026 {h2.mean():+.4f}; negative in "
+            f"{(ic < 0).mean():.0%} of months); top minus bottom fifth {100 * qs.mean():+.2f}% a "
+            f"month (t {qs.mean() / qs.std() * np.sqrt(len(qs)):.2f})"
+        )
+    order = sorted(pv, key=pv.get)
+    m = len(order)
+    passed = [sg for i, sg in enumerate(order) if pv[sg] <= 0.05 * (i + 1) / m]
+    res["  Benjamini-Hochberg at 5% across the four"] = (
+        ", ".join(f"{names[sg]} p {pv[sg]:.3f} (needs {0.05 * (i + 1) / m:.4f})"
+                  for i, sg in enumerate(order))
+        + f"; passing: {', '.join(names[x] for x in passed) if passed else 'none'}"
+    )
+    d["rvol"] = d["level"] - d["gap"]
+    ic_rv = pr.rank_ic(d, "rvol")
+    res["  recent realised vol alone"] = (
+        f"IC {ic_rv.mean():+.4f} (t {ic_rv.mean() / ic_rv.std() * np.sqrt(len(ic_rv)):.2f})"
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    xs = np.arange(len(names))
+    for j, (k, name, col) in enumerate(((0, "2015-2020", plots.MUTED),
+                                        (1, "2021-2026", plots.SERIES[0]))):
+        vals = [halves[sg][k] for sg in names]
+        ax.bar(xs + (j - 0.5) * 0.38, vals, 0.38, color=col, label=name)
+    full = [halves[sg][2] for sg in names]
+    err = [2 * halves[sg][3] for sg in names]
+    ax.errorbar(xs, full, yerr=err, fmt="o", color=plots.TEXT, ms=5, capsize=4,
+                label="all months, +-2 standard errors")
+    ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+    ax.set_xticks(xs, [names[sg] for sg in names])
+    ax.set_ylabel("average monthly rank correlation\nwith next month's return")
+    ax.legend(fontsize=9, loc="lower left")
+    ax.set_title("No stock option signal ranked next month's returns reliably")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "predict_stocks")
+    plt.close(fig)
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
     "arbitrage": report_arbitrage,
@@ -763,4 +902,5 @@ REPORTS: dict[str, Callable[[Path], dict]] = {
     "dynamics": report_dynamics,
     "forecast": report_forecast,
     "stocks": report_stocks,
+    "predict": report_predict,
 }
