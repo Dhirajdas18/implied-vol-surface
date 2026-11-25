@@ -73,9 +73,8 @@ a breach here is not a trade anyone could have made.
 
 - **Most breaches came from thin or in-the-money strikes.** On all traded strikes, 20.8% of
   butterflies and 9.2% of spreads broke the rule by over ₹1. With every leg at 1,000+ contracts
-  this fell to 3.7% and 0.75%, and every remaining spread breach was in the money (63% of the
-  butterflies), where a close taken at another moment of the day moves almost rupee for rupee
-  with NIFTY.
+  this fell to 3.7% and 0.75%, and 99.8% of the remaining spread breaches were in the money (63% of
+  the butterflies).
 - **Liquid out-of-the-money prices were nearly clean.** With every leg out of the money and at
   1,000+ contracts, 1.63% of butterflies broke by over ₹1 and 0.07% by over ₹5 (median breach
   ₹0.10, two ticks); order, spread and calendar breaches were 0.02% or less.
