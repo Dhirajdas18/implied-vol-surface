@@ -7,7 +7,10 @@
 <p class="note" id="sl-d-help">Every trading day for about the last year, and the last trading day of each month back to $first.</p>
 <p class="note" id="sl-note" aria-live="polite"></p>
 <dl class="stat-grid" id="sl-stats"></dl>
-<h3>Every expiry's smile on this date</h3>
+<h3>The surface in 3D</h3>
+<p class="note">How to read it: left to right is the strike (100% = today's forward, 90% = a strike 10% below); front to back is days to expiry; height and colour are implied volatility. The orange line is the chosen expiry, the dashed line runs along at-the-money. Drag to turn it, scroll to zoom, double-click to reset. Expiries a week or more out, strikes 85–115% of the forward (SVI fills the gaps where a strike didn't trade).</p>
+<div id="sl-3d" class="sim-chart surface" role="img" aria-label="Rotatable 3D surface of implied volatility against strike as a percentage of the forward and days to expiry, the chosen expiry highlighted"></div>
+<h3>The same surface, flat: every expiry's smile</h3>
 <p class="note">One line per expiry a week or more out, each drawn across the strikes that traded: implied volatility against the strike as a percentage of the forward (100 = at the money, 90 = a strike 10% below). Darker blue = further out; the chosen expiry is orange. Click a line to choose it.</p>
 <div id="sl-surf" class="sim-chart tall" role="img" aria-label="Implied volatility against strike as a percentage of the forward, one line per expiry on the chosen date, darker for later expiries, the chosen expiry highlighted"></div>
 <h3 id="sl-smile-title">The smile</h3>
@@ -126,6 +129,29 @@ const SL = $data;
       annotations: [{ x: 100, y: 1, yref: "paper", text: "at the money", showarrow: false, xanchor: "left", yanchor: "top", xshift: 4, font: { size: 11, color: t2 } }],
       xaxis: axis("strike, % of the forward (zoom out for the far strikes)", { ticksuffix: "%", range: xr }),
       yaxis: axis("implied volatility, %", { ticksuffix: "%", range: [yr[0] - ypad, yr[1] + ypad] }) }), cfg);
+    // 3D surface on plain axes: strike % of the forward × days to expiry, a common 85-115% strike
+    // range so the sheet is whole (SVI fills untraded strikes there), the chosen expiry in orange.
+    const xs = Array.from({ length: 41 }, (_, i) => 85 + 30 * i / 40);
+    const z3 = s3.map((x) => xs.map((v) => 100 * sviIv(x.p, Math.log(v / 100), x.T)));
+    const hov = s3.map((x) => xs.map((v) => `${fmtDay(x.expiry)} expiry (${x.days} days)<br>strike ${Math.round(x.F * v / 100).toLocaleString("en-IN")} (${v.toFixed(1)}% of forward)`));
+    const ax3 = (t, extra = {}) => Object.assign({ title: { text: t }, gridcolor: css("--grid"), zerolinecolor: css("--grid"), color: t2, backgroundcolor: css("--surface"), showspikes: false }, extra);
+    const pickRow = s3.indexOf(s);
+    const tr3 = [{ type: "surface", x: xs, y: s3.map((x) => x.days), z: z3, text: hov, colorscale: ramp(), opacity: 0.85,
+      colorbar: { title: { text: "implied vol" }, ticksuffix: "%", thickness: 12, len: 0.6, tickfont: { color: t2 } },
+      contours: { x: { show: true, start: 85, end: 115, size: 5, color: css("--surface"), width: 1 },
+                  z: { show: true, usecolormap: true, highlightcolor: t2, project: { z: false } } },
+      hovertemplate: "%{text}<br>implied vol %{z:.1f}%<extra></extra>" },
+      { type: "scatter3d", mode: "lines", x: s3.map(() => 100), y: s3.map((x) => x.days), z: s3.map((x) => 100 * sviIv(x.p, 0, x.T)),
+        line: { color: t2, width: 4, dash: "dash" }, name: "at the money", hoverinfo: "skip" }];
+    if (pickRow >= 0) tr3.push({ type: "scatter3d", mode: "lines", x: xs, y: xs.map(() => s.days), z: z3[pickRow].map((v) => v + 0.15),
+      line: { color: cb, width: 8 }, name: `${fmtDay(s.expiry)} (chosen)`, hoverinfo: "skip" });
+    const old3 = el("sl-3d").layout && el("sl-3d").layout.scene && el("sl-3d").layout.scene.camera;
+    Plotly.react("sl-3d", tr3, Object.assign(base(), { margin: { l: 0, r: 0, t: 8, b: 0 }, showlegend: true,
+      legend: { orientation: "h", x: 0, y: 1, yanchor: "top" },
+      scene: { xaxis: ax3("strike, % of forward", { ticksuffix: "%", dtick: 5 }), yaxis: ax3("days to expiry"), zaxis: ax3("implied vol", { ticksuffix: "%" }),
+        camera: old3 || { eye: { x: -0.8, y: -1.85, z: 1.15 }, center: { x: 0, y: 0, z: -0.15 } },
+        aspectmode: "manual", aspectratio: { x: 1.2, y: 1.2, z: 0.75 } } }), cfg);
+
     const surf = el("sl-surf");
     if (!surf.dataset.bound) {
       surf.dataset.bound = "1";
