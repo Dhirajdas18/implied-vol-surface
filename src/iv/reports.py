@@ -630,10 +630,137 @@ def report_forecast(out_dir: Path) -> dict:
     return res
 
 
+def report_stocks(out_dir: Path) -> dict:
+    """Stock option smiles against NIFTY's at each month-end 2015-2026 (SVI on the stock's
+    expiries 15-60 days out), and each stock's at-the-money implied variance as a forecast of its
+    variance over the next 21 trading days against GJR with common parameters (garch-volatility's
+    rule), EWMA and the 20-day variance, by QLIKE. Needs IV_LAKE_DIR (stock prices)."""
+    from iv import forecast as fc
+    from iv import stocks
+    from iv.data import STOCK_OPTIONS
+
+    res = {}
+    so = pd.read_parquet(STOCK_OPTIONS)
+    workers = max(1, (os.cpu_count() or 2) - 1)
+    with ProcessPoolExecutor(workers) as ex:
+        sl = pd.DataFrame([r for rr in ex.map(stocks.fit_date, so.groupby("date"), chunksize=2)
+                           for r in rr])
+    res["stock slices"] = (
+        f"{len(sl):,} on {sl['date'].nunique()} month-ends, {sl['symbol'].nunique()} stocks "
+        f"({sl.groupby('date')['symbol'].nunique().median():.0f} a month-end, median); fit error "
+        f"median {sl['rmse'].median():.2f} vol points; butterfly arbitrage "
+        f"{sl['butterfly'].mean():.1%}; futures forward {(sl['source'] == 'futures').mean():.0%}"
+    )
+
+    nifty = svi_table()
+    from iv.shape import atm_slope
+
+    nifty["slope"] = [atm_slope(dict(zip(s.PARAMS, r, strict=True)), t)
+                      for r, t in zip(nifty[list(s.PARAMS)].to_numpy(), nifty["T"], strict=True)]
+    pair = sl.merge(nifty[["date", "expiry", "slope", "atm_vol", "rr25"]],
+                    on=["date", "expiry"], suffixes=("", "_nifty"))
+    pair = pair[pair["rr25"].abs() < 1]  # a few degenerate fits put rr25 beyond 100 vol points
+    pair["skew_per_vol"] = pair["slope"] / pair["atm_vol"]
+    pair["nifty_skew_per_vol"] = pair["slope_nifty"] / pair["atm_vol_nifty"]
+    res["same date and expiry as NIFTY"] = (
+        f"{len(pair):,} stock slices; at-the-money vol median {pair['atm_vol'].median():.1%} "
+        f"against NIFTY's {pair['atm_vol_nifty'].median():.1%}"
+    )
+    res["at-the-money skew slope d(vol)/dk, median"] = (
+        f"stocks {pair['slope'].median():.3f}, NIFTY {pair['slope_nifty'].median():.3f}; "
+        f"stock steeper than NIFTY in {(pair['slope'] < pair['slope_nifty']).mean():.0%} of "
+        f"pairs; stock slope negative (puts dearer) in {(pair['slope'] < 0).mean():.0%}"
+    )
+    res["skew per unit of vol (slope / at-the-money vol), median"] = (
+        f"stocks {pair['skew_per_vol'].median():.2f}, "
+        f"NIFTY {pair['nifty_skew_per_vol'].median():.2f}"
+    )
+    res["25-delta risk reversal, median vol points"] = (
+        f"stocks {100 * pair['rr25'].median():+.2f}, NIFTY {100 * pair['rr25_nifty'].median():+.2f}"
+    )
+
+    lake = os.environ.get("IV_LAKE_DIR")
+    if not lake:
+        res["forecast"] = "skipped: IV_LAKE_DIR not set"
+        return res
+    p = pd.read_parquet(Path(lake) / "panel.parquet", columns=["date", "symbol", "adj_close"])
+    p = p[p["symbol"].isin(sl["symbol"].unique())]
+    px = p.pivot_table(index="date", columns="symbol", values="adj_close")
+    lr = np.log(px).diff()
+    g = stocks.gjr_common({c: 100 * lr[c].dropna() for c in lr})
+    d = stocks.forecast_table(sl, lr, g)
+    q = lambda c, x: pd.Series(fc.qlike(x["realised"], x[c]), index=x.index)  # noqa: E731
+    res["forecast cases"] = (
+        f"{len(d):,} stock-months, {d['symbol'].nunique()} stocks, {d['date'].nunique()} "
+        f"month-ends; average forecast / average realised: "
+        + ", ".join(f"{c} {d[c].mean() / d['realised'].mean():.2f}"
+                    for c in ("atm", "garch", "ewma", "hist20"))
+    )
+    rel = {}
+    for per, m in (("2016-2026", d["date"].dt.year > 0), ("2021-2026", d["date"].dt.year >= 2021)):
+        x = d[m]
+        base = q("hist20", x)
+        parts = []
+        for c in ("atm", "garch", "ewma"):
+            loss = q(c, x)
+            diff = (loss - base).groupby(x["date"]).mean()
+            t = fc.nw_t(diff.to_numpy(), 1)
+            parts.append(f"{c} {loss.mean() / base.mean() - 1:+.1%} (t {t:.1f})")
+            rel[(per, c)] = loss.mean() / base.mean() - 1
+        dd = (q("atm", x) - q("garch", x)).groupby(x["date"]).mean()
+        res[f"QLIKE against the 20-day variance, {per}"] = (
+            "; ".join(parts) + f"; implied against GJR: t {fc.nw_t(dd.to_numpy(), 1):.1f}, "
+            f"implied better in {(dd < 0).mean():.0%} of month-ends"
+        )
+    liq = d["contracts"].groupby(d["date"]).rank(pct=True)
+    third = pd.cut(liq, [0, 1 / 3, 2 / 3, 1], labels=["least", "middle", "most"])
+    res["by option trading that month (thirds within each month-end)"] = "; ".join(
+        f"{k} traded: implied {q('atm', g_).mean() / q('hist20', g_).mean() - 1:+.1%}, GJR "
+        f"{q('garch', g_).mean() / q('hist20', g_).mean() - 1:+.1%}"
+        for k, g_ in d.groupby(third, observed=True)
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    mon = pair.groupby("date").agg(stock=("slope", "median"), nifty=("slope_nifty", "median"))
+    ax.plot(mon.index, -mon["nifty"], color=plots.COLORS["NIFTY"], lw=1.8)
+    ax.plot(mon.index, -mon["stock"], color=plots.COLORS["stocks"], lw=1.8)
+    plots.label_line_end(ax, mon.index[-1], -mon["nifty"].iloc[-1], "NIFTY", plots.COLORS["NIFTY"])
+    plots.label_line_end(ax, mon.index[-1], -mon["stock"].iloc[-1], "median stock",
+                         plots.COLORS["stocks"])
+    ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+    ax.set_ylabel("how much dearer downside strikes are\n(minus the at-the-money slope)")
+    ax.set_title("Stock smiles were nearly flat; NIFTY's always tilted towards the downside")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "stock_skew")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    show = [("atm", "own at-the-money implied", plots.SERIES[0]),
+            ("garch", "GJR, common parameters", plots.SERIES[1]), ("ewma", "EWMA", plots.MUTED)]
+    pers_ = ["2016-2026", "2021-2026"]
+    xs = np.arange(len(pers_))
+    for j, (c, lab, col) in enumerate(show):
+        vals = [100 * rel[(pp, c)] for pp in pers_]
+        ax.bar(xs + (j - 1) * 0.26, vals, 0.26, color=col, label=lab)
+        for xx, y in zip(xs + (j - 1) * 0.26, vals, strict=True):
+            ax.text(xx, y - 1, f"{y:.0f}%", ha="center", va="top", fontsize=9, color=plots.TEXT)
+    ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+    ax.set_xticks(xs, [f"stock-months, {pp}" for pp in pers_])
+    ax.set_ylabel("loss forecasting the next 21 days'\nvariance, against the 20-day, %")
+    ax.set_ylim(top=4)
+    ax.legend(fontsize=9, loc="lower right")
+    ax.set_title("A stock's own option prices forecast its volatility better than GARCH")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "stock_forecast")
+    plt.close(fig)
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
     "arbitrage": report_arbitrage,
     "tails": report_tails,
     "dynamics": report_dynamics,
     "forecast": report_forecast,
+    "stocks": report_stocks,
 }

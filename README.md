@@ -19,7 +19,7 @@ studies are rerun locally.
 - [x] Risk-neutral densities and tail probabilities against realised moves
 - [x] Surface dynamics: sticky strike against sticky delta, principal components
 - [x] Forecasting realised volatility: implied by maturity against GARCH and India VIX
-- [ ] Stock option surfaces against NIFTY
+- [x] Stock option surfaces against NIFTY
 - [ ] Does the skew or term structure predict returns or crashes
 
 ## Findings
@@ -172,6 +172,37 @@ implied-plus-GARCH blend are fitted on 2015–2020.
 - **Adding GARCH didn't help.** A blend fitted on 2015–2020 (0.64 × implied + 0.38 × GARCH in logs
   at 21 days) scored worse than implied alone on 2021–2026 at every horizon (t +1.7 to +2.5).
 
+### 6. Stock smiles were nearly flat, unlike NIFTY's, and a stock's own options forecast its volatility better than GARCH
+
+<a href="docs/img/stock_skew.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/stock_skew.png"><img src="docs/img/stock_skew.gif" alt="Median stock and NIFTY at-the-money skew at each month-end, 2015-2026" width="720"></picture></a>
+
+<a href="docs/img/stock_forecast.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/stock_forecast.png"><img src="docs/img/stock_forecast.gif" alt="Forecast loss against the 20-day variance for each stock's own at-the-money implied variance, GJR with common parameters and EWMA, next 21 trading days" width="720"></picture></a>
+
+At each of the 142 month-ends, every stock's expiries 15–60 days out with at least five traded
+out-of-the-money quotes get an SVI fit, as for NIFTY (forward from put-call parity, or the stock
+future for 16% of slices): 27,260 slices, 376 stocks, a median 182 a month-end (fit error median
+0.70 vol points). Each is compared with NIFTY's slice of the same date and expiry. For the forecast,
+the slice nearest 30 days gives at-the-money implied variance for the next 21 trading days (stock
+prices from the archive, split-adjusted), against GJR with Student-t shocks and common parameters
+set each January from data before it (garch-volatility's choice for stocks), EWMA and the 20-day
+variance: 19,876 stock-months, 334 stocks, 2016–2026 (GJR needs three years of returns); QLIKE,
+Newey-West t-statistics on monthly cross-sectional means.
+
+- **Stock smiles were almost flat.** The median at-the-money slope was −0.027 for stocks and −0.375
+  for NIFTY on the same date and expiry; a stock's skew was steeper than NIFTY's in 6% of pairs,
+  and puts were dearer than calls in only 56% of stock slices. Per unit of volatility the gap was
+  −0.08 against −2.76; the 25-delta risk reversal −0.24 against −2.03 vol points.
+- **Stocks were far more volatile but priced less steeply.** At-the-money implied volatility had a
+  median of 32.5% for stocks against 13.7% for NIFTY.
+- **A stock's own options beat GARCH.** At-the-money implied variance's loss was 46.6% below the
+  20-day variance's, GJR's 34.2% and EWMA's 21.1%; implied beat GJR in 69% of month-ends (t −2.6),
+  74% in 2021–2026.
+- **It held for thinly and heavily traded options alike.** Splitting each month-end's stocks into
+  thirds by option contracts traded, implied scored −49.2%, −45.6% and −45.0%; GJR −41.9%, −34.8%
+  and −25.7%.
+- **Stock implied variance ran higher than what followed.** On average 1.12 times realised (GJR
+  1.03), against 1.03 for NIFTY's at-the-money variance over 21 days (finding 5).
+
 ## Quick start
 
 ```bash
@@ -181,7 +212,7 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
-                                         # (topics: surface, arbitrage, tails, dynamics, forecast)
+                                         # (topics: surface, arbitrage, tails, dynamics, forecast, stocks)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -220,6 +251,8 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
 - `src/iv/forecast.py`: realised-variance targets over 5, 21 and 63 trading days, implied forecasts
   matched to each window's calendar days (at the money and the VIX-method variance swap), GJR-GARCH
   refitted each January with `arch`, QLIKE and Newey-West t-statistics.
+- `src/iv/stocks.py`: month-end SVI slices for every stock with options, GJR with common
+  parameters refitted each January (variance-targeted per stock), and the stock forecast table.
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.
