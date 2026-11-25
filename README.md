@@ -8,7 +8,7 @@ The NIFTY implied volatility surface, every strike and expiry on every trading d
 results (fitted parameters and summaries) are committed; the raw NSE data stays local.
 
 **Live surface lab: [dhirajdas18.github.io/implied-vol-surface](https://dhirajdas18.github.io/implied-vol-surface/)**,
-pick a date and an expiry and see the 3D surface, the smile against the market, the term
+pick a date and an expiry and see every expiry's smile, the chosen one against the market, the term
 structure of at-the-money volatility and skew, and the no-arbitrage flags; updated when the
 studies are rerun locally.
 

@@ -7,10 +7,11 @@
 <p class="note" id="sl-d-help">Every trading day for about the last year, and the last trading day of each month back to $first.</p>
 <p class="note" id="sl-note" aria-live="polite"></p>
 <dl class="stat-grid" id="sl-stats"></dl>
-<h3>The surface: implied volatility by log-moneyness and days to expiry (expiries a week or more out)</h3>
-<div id="sl-surf" class="sim-chart surface" role="img" aria-label="Three-dimensional surface of SVI implied volatility against log-moneyness and days to expiry for the chosen date, drawn over each expiry's quoted range"></div>
+<h3>Every expiry's smile on this date</h3>
+<p class="note">One line per expiry a week or more out, each drawn across the strikes that traded: implied volatility against the strike as a percentage of the forward (100 = at the money, 90 = a strike 10% below). Darker blue = further out; the chosen expiry is orange. Click a line to choose it.</p>
+<div id="sl-surf" class="sim-chart tall" role="img" aria-label="Implied volatility against strike as a percentage of the forward, one line per expiry on the chosen date, darker for later expiries, the chosen expiry highlighted"></div>
 <h3 id="sl-smile-title">The smile</h3>
-<div id="sl-smile" class="sim-chart" role="img" aria-label="Implied volatility against log-moneyness for the chosen expiry: the SVI fit as a line and, for recent dates, the market quotes as points"></div>
+<div id="sl-smile" class="sim-chart" role="img" aria-label="Implied volatility against strike as a percentage of the forward for the chosen expiry: the SVI fit as a line and, for recent dates, the market quotes as points"></div>
 <h3>Term structure: at-the-money volatility</h3>
 <div id="sl-atm" class="sim-chart" role="img" aria-label="At-the-money-forward implied volatility against days to expiry for every fitted expiry on the chosen date"></div>
 <h3>Term structure: skew</h3>
@@ -96,38 +97,57 @@ const SL = $data;
       `SVI fitted to ${s.n} out-of-the-money quotes, at-the-money volatility ${pct(s.atm)}, ` +
       `25-delta risk reversal ${pts(s.rr25)}.` + (q ? "" : " Market quotes are shown for the last 20 trading days only; this date shows the SVI fit alone.");
 
-    // 3D surface: each expiry's SVI slice, drawn only across the k range it has quotes for.
-    // Expiries under a week are left out: their far wings reach volatilities that flatten the rest.
+    // Every expiry's smile, 2D: x = strike as % of the forward (100 e^k), drawn over each expiry's
+    // quoted range. Expiries under a week are left out: their far wings reach volatilities that
+    // flatten the rest. Sequential blue by expiry order (darker = later; lighter = later on dark).
     const s3 = ss.filter((x) => x.days >= 7).length >= 2 ? ss.filter((x) => x.days >= 7) : ss;
-    const kLo = Math.max(-0.5, Math.min(...s3.map((x) => x.k_lo)));
-    const kHi = Math.min(0.3, Math.max(...s3.map((x) => x.k_hi)));
-    const ks = Array.from({ length: 61 }, (_, i) => kLo + (kHi - kLo) * i / 60);
-    const z = s3.map((x) => ks.map((k) => (k >= x.k_lo - 1e-9 && k <= x.k_hi + 1e-9) ? 100 * sviIv(x.p, k, x.T) : null));
-    const scene = (t) => ({ title: { text: t }, gridcolor: css("--grid"), zerolinecolor: css("--grid"), color: t2, backgroundcolor: css("--surface") });
-    Plotly.react("sl-surf", [{ type: "surface", x: ks, y: s3.map((x) => x.days), z, colorscale: ramp(),
-      connectgaps: false, showscale: true, colorbar: { title: { text: "vol, %" }, thickness: 12, len: 0.6, tickfont: { color: t2 } },
-      hovertemplate: "k %{x:.3f}<br>%{y} days<br>%{z:.1f}%<extra></extra>",
-      contours: { z: { show: false } } }],
-      Object.assign(base(), { margin: { l: 0, r: 0, t: 8, b: 0 },
-        scene: { xaxis: scene("log-moneyness k"), yaxis: scene("days to expiry"), zaxis: scene("implied vol, %"),
-          camera: { eye: { x: -1.6, y: -1.6, z: 0.9 } }, aspectmode: "manual", aspectratio: { x: 1.2, y: 1.2, z: 0.7 } } }), cfg);
+    const hex = css("--surface").replace("#", "");
+    const dark = hex.length === 6 && (0.299 * parseInt(hex.slice(0, 2), 16) + 0.587 * parseInt(hex.slice(2, 4), 16) + 0.114 * parseInt(hex.slice(4, 6), 16)) < 128;
+    const blues = dark ? ["#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"] : ["#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+    const shade = (i, n) => blues[n < 2 ? 2 : Math.round(i * (blues.length - 1) / (n - 1))];
+    const fam = s3.map((x, i) => {
+      const kx = Array.from({ length: 61 }, (_, j) => x.k_lo + (x.k_hi - x.k_lo) * j / 60);
+      const on = x === s;
+      return { x: kx.map((k) => 100 * Math.exp(k)), y: kx.map((k) => 100 * sviIv(x.p, k, x.T)), mode: "lines",
+        line: { color: on ? cb : shade(i, s3.length), width: on ? 3.5 : 1.8 },
+        name: `${fmtDay(x.expiry)} (${x.days} days)`, legendrank: on ? 0 : 10 + i, meta: x.expiry,
+        customdata: kx.map((k) => x.F * Math.exp(k)),
+        hovertemplate: `${fmtDay(x.expiry)}, ${x.days} days<br>strike %{customdata:,.0f} (%{x:.1f}% of forward)<br>implied vol %{y:.1f}%<extra></extra>` };
+    });
+    fam.sort((u, v) => (u.meta === s.expiry) - (v.meta === s.expiry)); // chosen line drawn on top
+    // Default view: strikes 75-125% of the forward (where most of the trading is); y fitted to what's
+    // in view. Zoom out with the chart's controls to see the far strikes.
+    const xr = [Math.max(75, Math.min(...fam.map((t) => t.x[0]))), Math.min(125, Math.max(...fam.map((t) => t.x[t.x.length - 1])))];
+    const inView = fam.flatMap((t) => t.y.filter((_, j) => t.x[j] >= xr[0] && t.x[j] <= xr[1]));
+    const yr = [Math.min(...inView), Math.max(...inView)], ypad = 0.08 * (yr[1] - yr[0] || 1);
+    Plotly.react("sl-surf", fam, Object.assign(base(), {
+      legend: { orientation: "v", x: 1.01, xanchor: "left", y: 1, font: { size: 11 } }, margin: { l: 56, r: 8, t: 16, b: 48 },
+      shapes: [{ type: "line", yref: "paper", x0: 100, x1: 100, y0: 0, y1: 1, line: { color: mu, width: 1, dash: "dash" } }],
+      annotations: [{ x: 100, y: 1, yref: "paper", text: "at the money", showarrow: false, xanchor: "left", yanchor: "top", xshift: 4, font: { size: 11, color: t2 } }],
+      xaxis: axis("strike, % of the forward (zoom out for the far strikes)", { ticksuffix: "%", range: xr }),
+      yaxis: axis("implied volatility, %", { ticksuffix: "%", range: [yr[0] - ypad, yr[1] + ypad] }) }), cfg);
+    const surf = el("sl-surf");
+    if (!surf.dataset.bound) {
+      surf.dataset.bound = "1";
+      surf.on("plotly_click", (ev) => { const e = ev.points[0].data.meta; if (e) { el("sl-e").value = e; update(); } });
+    }
 
     // Smile: SVI over the quoted range (a little beyond, dotted), market quotes as points.
     const pad = 0.25 * (s.k_hi - s.k_lo);
     const kk = Array.from({ length: 121 }, (_, i) => s.k_lo - pad + (s.k_hi - s.k_lo + 2 * pad) * i / 120);
     const inside = kk.map((k) => (k >= s.k_lo && k <= s.k_hi) ? 100 * sviIv(s.p, k, s.T) : null);
     const traces = [
-      { x: kk, y: kk.map((k) => 100 * sviIv(s.p, k, s.T)), mode: "lines", line: { color: ca, width: 1.2, dash: "dot" }, name: "SVI beyond the quotes", hoverinfo: "skip" },
-      { x: kk, y: inside, mode: "lines", line: { color: ca, width: 2.5 }, name: "SVI fit", customdata: kk.map((k) => s.F * Math.exp(k)),
-        hovertemplate: "k %{x:.3f} (strike %{customdata:,.0f})<br>SVI %{y:.2f}%<extra></extra>" },
+      { x: kk.map((k) => 100 * Math.exp(k)), y: kk.map((k) => 100 * sviIv(s.p, k, s.T)), mode: "lines", line: { color: ca, width: 1.2, dash: "dot" }, name: "SVI beyond the quotes", hoverinfo: "skip" },
+      { x: kk.map((k) => 100 * Math.exp(k)), y: inside, mode: "lines", line: { color: ca, width: 2.5 }, name: "SVI fit", customdata: kk.map((k) => s.F * Math.exp(k)),
+        hovertemplate: "strike %{customdata:,.0f} (%{x:.1f}% of forward)<br>SVI %{y:.2f}%<extra></extra>" },
     ];
-    if (q) traces.push({ x: q[0], y: q[1].map((v) => 100 * v), mode: "markers", marker: { color: t2, size: 6, line: { color: css("--surface"), width: 1 } },
+    if (q) traces.push({ x: q[0].map((k) => 100 * Math.exp(k)), y: q[1].map((v) => 100 * v), mode: "markers", marker: { color: t2, size: 6, line: { color: css("--surface"), width: 1 } },
       name: "market (out of the money)", customdata: q[0].map((k) => s.F * Math.exp(k)),
-      hovertemplate: "k %{x:.3f} (strike %{customdata:,.0f})<br>market %{y:.2f}%<extra></extra>" });
+      hovertemplate: "strike %{customdata:,.0f} (%{x:.1f}% of forward)<br>market %{y:.2f}%<extra></extra>" });
     el("sl-smile-title").textContent = `The smile, ${fmtDay(s.expiry)} expiry` + (q ? ": SVI against the market" : ": SVI fit");
     Plotly.react("sl-smile", traces, Object.assign(base(), {
-      shapes: [{ type: "line", yref: "paper", x0: 0, x1: 0, y0: 0, y1: 1, line: { color: mu, width: 1, dash: "dash" } }],
-      xaxis: axis("log-moneyness k = ln(strike / forward)"), yaxis: axis("implied volatility, %", { ticksuffix: "%" }) }), cfg);
+      shapes: [{ type: "line", yref: "paper", x0: 100, x1: 100, y0: 0, y1: 1, line: { color: mu, width: 1, dash: "dash" } }],
+      xaxis: axis("strike, % of the forward", { ticksuffix: "%" }), yaxis: axis("implied volatility, %", { ticksuffix: "%" }) }), cfg);
 
     // Term structure.
     const days = ss.map((x) => x.days), pick = ss.map((x) => x === s);
