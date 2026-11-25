@@ -412,8 +412,134 @@ def report_tails(out_dir: Path) -> dict:
     return res
 
 
+def report_dynamics(out_dir: Path) -> dict:
+    """How the surface moves, 2015-2026. (1) Sticky rules on the 30-day constant-maturity smile
+    from one trading day to the next: the at-the-money multiplier beta in d(vol) = beta S r, by
+    year, and the whole-smile error of the rule "tomorrow's vol at k = today's at k + beta r"
+    (beta fitted on 2015-2020, scored on 2021-2026). (2) Principal components of daily changes of
+    the vol grid at 95-105% of the forward and 30, 60 and 90 days, with the 2015-2020 components
+    scored on 2021-2026."""
+    from iv import dynamics as dy
+
+    res = {}
+    svi = svi_table()
+    st = dy.sticky(svi)
+    x = st["slope"] * st["r"]
+    beta = lambda m: float((x[m] * st["d_atm"][m]).sum() / (x[m] ** 2).sum())  # noqa: E731
+    train, test = st.index.year <= 2020, st.index.year >= 2021
+    yrs = sorted(set(st.index.year))
+    by = {y: beta(st.index.year == y) for y in yrs}
+    res["day pairs"] = (
+        f"{len(st):,} ({int(train.sum()):,} in 2015-2020, {int(test.sum()):,} in 2021-2026); "
+        f"30-day at-the-money slope d(vol)/dk median {st['slope'].median():.2f}"
+    )
+    res["at-the-money multiplier beta (1 = sticky strike, 0 = sticky moneyness)"] = (
+        f"all {beta(st.index == st.index):.2f}; 2015-2020 {beta(train):.2f}, 2021-2026 "
+        f"{beta(test):.2f}; rises {beta(st['r'] > 0):.2f}, falls {beta(st['r'] < 0):.2f}; by year "
+        f"{min(by.values()):.2f} to {max(by.values()):.2f}, above 1 in "
+        f"{sum(v > 1 for v in by.values())} of {len(by)} years"
+    )
+    res["  so a 1% fall in NIFTY moved 30-day at-the-money vol by"] = (
+        f"{-beta(st.index == st.index) * st['slope'].median() * 0.01 * 100:+.2f} points at the "
+        f"median slope (sticky strike: {-st['slope'].median() * 0.01 * 100:+.2f})"
+    )
+    errs = [c for c in st if c.startswith("err_")]
+    bvals = [float(c[4:]) for c in errs]
+    best = bvals[int(np.argmin(st.loc[train, errs].mean().to_numpy()))]
+    res["whole-smile error of the shift rule, 2021-2026 (vol points, mean over days)"] = (
+        ", ".join(f"beta {b:g} {st.loc[test, c].mean():.3f}" for b, c in zip(bvals, errs,
+                                                                               strict=True))
+        + f"; best on 2015-2020: beta {best:g}"
+    )
+    big = test & (st["r"].abs() > 0.01)
+    res["  on 2021-2026 days with a move over 1%"] = (
+        f"{int(big.sum())} days: " + ", ".join(
+            f"beta {b:g} {st.loc[big, c].mean():.3f}" for b, c in zip(bvals, errs, strict=True)
+            if b in (0.0, 0.5, 1.0, 2.0))
+    )
+
+    lv = [c for c in st if c.startswith("lvl_")]
+    lbest = lv[int(np.argmin(st.loc[train, lv].mean().to_numpy()))]
+    win = lambda m: (st.loc[m, lbest] < st.loc[m, f"err_{best}"]).mean()  # noqa: E731
+    res["same shape against the forward, level shifted by b S r (vol points, 2021-2026)"] = (
+        ", ".join(f"b {c[4:]} {st.loc[test, c].mean():.3f}" for c in lv)
+        + f"; best on 2015-2020: b {lbest[4:]}; days with a move over 1%: "
+        + ", ".join(f"b {c[4:]} {st.loc[big, c].mean():.3f}" for c in lv)
+        + f"; beats the best slide on {win(test):.0%} of days ({win(big):.0%} of big-move days)"
+    )
+    rules = [("sticky moneyness", "err_0.0"), ("sticky strike", "err_1.0"),
+             (f"best slide ({best:g}x)", f"err_{best}"),
+             (f"same shape,\nlevel moves ({float(lbest[4:]):g}x)", lbest)]
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    xs = np.arange(len(rules))
+    for j, (mask, lab, col) in enumerate(((test, "every day", plots.MUTED),
+                                          (big, "days NIFTY moved over 1%", plots.SERIES[0]))):
+        vals = [st.loc[mask, c].mean() for _, c in rules]
+        ax.bar(xs + (j - 0.5) * 0.38, vals, 0.38, color=col, label=lab)
+        for xx, y in zip(xs + (j - 0.5) * 0.38, vals, strict=True):
+            ax.text(xx, y + 0.02, f"{y:.2f}", ha="center", va="bottom", fontsize=9,
+                    color=plots.TEXT)
+    ax.set_xticks(xs, [r[0] for r in rules])
+    ax.set_ylabel("error predicting tomorrow's\n30-day smile, vol points")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.set_title("Tomorrow's smile: same shape against the forward, level moved against NIFTY")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "sticky")
+    plt.close(fig)
+
+    g = dy.grid(svi)
+    v = g.drop(columns="F", level=0).dropna()
+    gap = v.index.to_series().diff().dt.days
+    ch = (v.diff() * 100)[gap <= 5].dropna()
+    share, load, sc = dy.pca(ch)
+    r = np.log(g[("F", 30)]).diff().reindex(sc.index)
+    res["grid changes"] = (
+        f"{len(ch):,} day-to-day changes (gaps of 5 days or less), {ch.shape[1]} points "
+        f"(95-105% of the forward x 30, 60, 90 days)"
+    )
+    res["principal components, share of variance"] = ", ".join(
+        f"PC{i + 1} {share[i]:.1%}" for i in range(4))
+    res["  correlation of each component with NIFTY's move"] = ", ".join(
+        f"{c} {sc[c].corr(r):+.2f}" for c in sc)
+    tr, te = ch[ch.index.year <= 2020], ch[ch.index.year >= 2021]
+    s1, l1, _ = dy.pca(tr)
+    s2, l2, _ = dy.pca(te)
+    x2 = te.to_numpy() - te.to_numpy().mean(axis=0)
+    tot = (x2**2).sum()
+    oos = [1 - ((x2 - x2 @ l1[:, :n] @ l1[:, :n].T) ** 2).sum() / tot for n in (1, 2, 3)]
+    res["  2015-2020 components on 2021-2026 changes (share explained, 1/2/3 components)"] = (
+        " / ".join(f"{v:.1%}" for v in oos)
+        + f"; 2021-2026's own: {s2[0]:.1%} / {s2[:2].sum():.1%} / {s2[:3].sum():.1%}; "
+        f"first component's loadings correlate {abs(np.corrcoef(l1[:, 0], l2[:, 0])[0, 1]):.2f}"
+    )
+
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.8), sharey=True)
+    mny = sorted({c[1] for c in ch.columns})
+    names = ("level: everything up or down", "term: short against long",
+             "skew: downside against upside")
+    cols = {30: plots.SERIES[1], 60: plots.SERIES[0], 90: plots.BLUE_RAMP[6]}
+    for j, ax in enumerate(axes):
+        for m in (30, 60, 90):
+            idx = [list(ch.columns).index((m, k)) for k in mny]
+            ax.plot(mny, load[idx, j], color=cols[m], lw=2, marker="o", ms=4,
+                    label=f"{m} days")
+        ax.axhline(0, color=plots.TEXT_2, lw=0.8)
+        ax.set_title(f"PC{j + 1} ({share[j]:.0%}): {names[j]}", fontsize=10.5)
+        ax.set_xlabel("strike, % of forward")
+        ax.set_xticks(mny, [f"{k:g}" for k in mny])
+    axes[0].set_ylabel("weight in the component")
+    axes[0].legend(fontsize=8.5, loc="lower left")
+    fig.suptitle("Daily surface changes were mostly one move: the whole surface up or down",
+                 x=0.01, ha="left", fontsize=13, fontweight="semibold")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "pca")
+    plt.close(fig)
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
     "arbitrage": report_arbitrage,
     "tails": report_tails,
+    "dynamics": report_dynamics,
 }

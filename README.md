@@ -17,7 +17,7 @@ studies are rerun locally.
 - [x] Building the surface: forwards, out-of-the-money quotes, SVI per expiry
 - [x] No-arbitrage checks on quotes and fits
 - [x] Risk-neutral densities and tail probabilities against realised moves
-- [ ] Surface dynamics: sticky strike against sticky delta, principal components
+- [x] Surface dynamics: sticky strike against sticky delta, principal components
 - [ ] Forecasting realised volatility: implied by maturity against GARCH and India VIX
 - [ ] Stock option surfaces against NIFTY
 - [ ] Does the skew or term structure predict returns or crashes
@@ -116,6 +116,35 @@ protection, so they need not match real frequencies.
 - **The smile beat a flat volatility only slightly.** Its log score was +0.145 a month higher than
   a lognormal at the at-the-money volatility (t 1.06, better in 56% of months).
 
+### 4. From day to day, the smile kept its shape against the forward while its level moved against NIFTY
+
+<a href="docs/img/sticky.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/sticky.png"><img src="docs/img/sticky.gif" alt="Error predicting the next day's 30-day smile with sticky moneyness, sticky strike, the best slide and a same-shape level-shift rule, every day and on days NIFTY moved over 1 percent, 2021-2026" width="720"></picture></a>
+
+<a href="docs/img/pca.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/pca.png"><img src="docs/img/pca.gif" alt="Loadings of the first three principal components of daily surface changes by strike and maturity" width="720"></picture></a>
+
+A constant-maturity surface is interpolated every day (total variance linear in time between the
+two expiries around 30, 60 and 90 days). Each rule predicts tomorrow's 30-day smile from today's
+and NIFTY's move r (the change in the 30-day forward): sticky moneyness keeps vol at each
+strike-to-forward ratio; sticky strike keeps vol at each strike; a slide moves the smile by a
+multiple of r; the same-shape rule keeps the shape and shifts the whole smile by b·S·r, where S is
+today's at-the-money slope. Multipliers are chosen on 2015–2020 and scored on 2021–2026 (1,455 day
+pairs). Changes on a grid of strikes 95–105% of the forward at 30, 60 and 90 days (2,312 daily
+changes) give the principal components.
+
+- **At the money, vol moved more than sticky strike says.** With a median slope of −0.39, sticky
+  strike says a 1% fall lifts 30-day at-the-money vol by 0.39 points; it rose by 0.55 (multiplier
+  1.40; 1.37 in 2015–2020, 1.51 in 2021–2026, above 1 in 11 of 12 years, the same for rises and
+  falls).
+- **Neither sticky rule predicted the whole smile well.** On 2021–2026 their errors were 1.07 and
+  1.10 vol points; on days NIFTY moved over 1% (277), 1.47 and 1.44.
+- **Same shape, level moved, did best.** Keeping the shape against the forward and moving the
+  whole smile by 1×S·r cut the error to 0.99 points, and to 1.16 on big-move days, better than the
+  best slide on 64% of days and 79% of big-move days.
+- **One move explained most of each day's change.** The whole surface rising or falling together
+  was 86% of the variance (correlation −0.59 with NIFTY's move); short against long dated 6.8%; the
+  downside against the upside 2.9%. Components found on 2015–2020 explained 89% of 2021–2026's
+  changes, against 93% for 2021–2026's own.
+
 ## Quick start
 
 ```bash
@@ -125,7 +154,7 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
-                                         # (topics: surface, arbitrage, tails)
+                                         # (topics: surface, arbitrage, tails, dynamics)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -158,6 +187,9 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
 - `src/iv/rnd.py`: the risk-neutral distribution from an SVI slice (digital-put CDF and Gatheral
   density), one slice per monthly expiry about 30 days ahead, and its comparison with the
   expiry-day close.
+- `src/iv/dynamics.py`: the constant-maturity surface (total variance interpolated in time), the
+  next-day test of sticky-moneyness, sticky-strike, slide and same-shape rules, and principal
+  components of daily changes.
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.
