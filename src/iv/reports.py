@@ -304,7 +304,116 @@ def report_arbitrage(out_dir: Path) -> dict:
     return res
 
 
+def nifty_close() -> pd.Series:
+    """NIFTY's daily close: the local lake (IV_LAKE_DIR) or Yahoo's ^NSEI."""
+    lake = os.environ.get("IV_LAKE_DIR")
+    if lake:
+        m = pd.read_parquet(Path(lake) / "market.parquet").set_index("date")
+        return m["nifty"].dropna()
+    import yfinance as yf
+
+    c = yf.download("^NSEI", start="2015-01-01", progress=False, auto_adjust=False,
+                    threads=False)["Close"]
+    return (c.iloc[:, 0] if isinstance(c, pd.DataFrame) else c).dropna()
+
+
+def report_tails(out_dir: Path) -> dict:
+    """What the surface priced against what NIFTY did, 2015-2026: one slice about 30 days before
+    each monthly expiry (non-overlapping months), its risk-neutral distribution of the move from
+    the forward to the expiry close, against the realised move: priced against realised chances of
+    moves beyond 3, 5 and 10%, the probability-integral transform, and the log score against a
+    flat smile at the at-the-money volatility."""
+    from scipy.stats import binomtest, chisquare, kstest
+
+    from iv import rnd
+    from iv.build import OPTION_COLS
+    from iv.data import NIFTY_OPTIONS, SVI_DAILY
+
+    res = {}
+    svi = pd.read_parquet(SVI_DAILY)
+    opts = pd.read_parquet(NIFTY_OPTIONS, columns=OPTION_COLS)
+    d = rnd.run(svi, opts, nifty_close())
+    n = len(d)
+    res["months"] = (
+        f"{n} monthly expiries, {d['date'].min():%b %Y} to {d['expiry'].max():%b %Y}; "
+        f"{d['days'].median():.0f} days ahead (median); {int(d['refit'].sum())} slices refitted "
+        f"for butterfly arbitrage; density checks: total probability {d['mass'].min():.4f}-"
+        f"{d['mass'].max():.4f}, expected price / forward {d['mean'].min():.4f}-"
+        f"{d['mean'].max():.4f}"
+    )
+    calm = ~d["date"].between("2020-02-01", "2020-04-30")
+    rms = lambda v: 100 * float(np.sqrt((v**2).mean()))  # noqa: E731
+    res["move from the forward to the expiry close"] = (
+        f"mean {100 * d['x'].mean():+.2f}%; root mean square {rms(d['x']):.2f}% against "
+        f"{rms(d['sd_atm']):.2f}% priced at the money; leaving out the three months from Feb-Apr "
+        f"2020: {rms(d.loc[calm, 'x']):.2f}% against {rms(d.loc[calm, 'sd_atm']):.2f}%; largest: "
+        f"{100 * d['x'].min():+.1f}% (from {d.loc[d['x'].idxmin(), 'date']:%d %b %Y})"
+    )
+    rows = []
+    for side in ("down", "up"):
+        for t in rnd.MOVES:
+            k = int(d[f"{side}{t}"].sum())
+            ci = binomtest(k, n).proportion_ci(0.90)
+            q, f = d[f"q_{side}{t}"].mean(), d[f"flat_{side}{t}"].mean()
+            p_two = binomtest(k, n, q).pvalue
+            rows.append((side, t, q, f, k / n))
+            res[f"{'fall' if side == 'down' else 'rise'} of over {t}%"] = (
+                f"priced {q:.1%} (flat smile {f:.1%}); happened {k} of {n} = {k / n:.1%} "
+                f"(90% interval {ci.low:.1%}-{ci.high:.1%}; p {p_two:.2f} against the priced rate)"
+            )
+    hist = np.histogram(d["pit"], bins=10, range=(0, 1))[0]
+    hist_f = np.histogram(d["pit_flat"], bins=10, range=(0, 1))[0]
+    res["where the outcome landed in the priced distribution (deciles, lowest first)"] = (
+        f"smile {hist.tolist()}, flat {hist_f.tolist()}; {n / 10:.1f} each if the prices were "
+        f"right; even spread: chi-square p {chisquare(hist).pvalue:.2f}, Kolmogorov-Smirnov p "
+        f"{kstest(d['pit'], 'uniform').pvalue:.2f} "
+        f"(flat {kstest(d['pit_flat'], 'uniform').pvalue:.2f})"
+    )
+    dl = d["ls"] - d["ls_flat"]
+    res["log score, smile minus flat"] = (
+        f"{dl.mean():+.3f} a month (t {dl.mean() / dl.std() * np.sqrt(n):.2f}); smile better in "
+        f"{(dl > 0).mean():.0%} of months"
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    lab = [f"{'fall' if sd == 'down' else 'rise'} >{t}%" for sd, t, *_ in rows]
+    xs = np.arange(len(rows))
+    for j, (i, name, col) in enumerate(((2, "priced by the surface", plots.SERIES[0]),
+                                        (4, "happened", plots.SERIES[1]))):
+        vals = [100 * r[i] for r in rows]
+        ax.bar(xs + (j - 0.5) * 0.38, vals, 0.38, color=col, label=name)
+        for x, y in zip(xs + (j - 0.5) * 0.38, vals, strict=True):
+            ax.text(x, y + 0.4, f"{y:.1f}%", ha="center", va="bottom", fontsize=8.5,
+                    color=plots.TEXT)
+    ax.set_xticks(xs, lab)
+    ax.set_ylabel(f"chance over the next month, % ({n} months)")
+    ax.legend(fontsize=9, loc="upper right")
+    ax.set_title("Over 142 months, the surface's odds of big moves were close to what happened")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "tails")
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    centers = np.arange(10)
+    ax.bar(centers, hist, 0.8, color=plots.SERIES[0])
+    ax.axhline(n / 10, color=plots.TEXT_2, lw=1, ls="--")
+    ax.text(7, n / 10 + 0.3, "if the prices were right", ha="center", va="bottom",
+            fontsize=9, color=plots.TEXT_2)  # over the 70-80% bar, clear of the value labels
+    for x, y in zip(centers, hist, strict=True):
+        ax.text(x, y + 0.2, str(y), ha="center", va="bottom", fontsize=9, color=plots.TEXT)
+    ax.set_xticks(centers, ["lowest\n10%"] + [f"{10 * i}-{10 * i + 10}%" for i in range(1, 9)]
+                  + ["highest\n10%"])
+    ax.set_xlabel("where the expiry close landed in the priced distribution")
+    ax.set_ylabel("months")
+    ax.set_title("Outcomes spread across the priced range about as evenly as the prices implied")
+    fig.tight_layout()
+    plots.save(fig, out_dir, "pit")
+    plt.close(fig)
+    return res
+
+
 REPORTS: dict[str, Callable[[Path], dict]] = {
     "surface": report_surface,
     "arbitrage": report_arbitrage,
+    "tails": report_tails,
 }

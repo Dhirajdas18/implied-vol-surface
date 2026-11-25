@@ -16,7 +16,7 @@ studies are rerun locally.
 
 - [x] Building the surface: forwards, out-of-the-money quotes, SVI per expiry
 - [x] No-arbitrage checks on quotes and fits
-- [ ] Risk-neutral densities and tail probabilities against realised moves
+- [x] Risk-neutral densities and tail probabilities against realised moves
 - [ ] Surface dynamics: sticky strike against sticky delta, principal components
 - [ ] Forecasting realised volatility: implied by maturity against GARCH and India VIX
 - [ ] Stock option surfaces against NIFTY
@@ -86,6 +86,36 @@ a breach here is not a trade anyone could have made.
   negative g(k) made 94% arbitrage-free (97% of weekly ones); the fit error rose from 0.73 to 0.79
   vol points at the median (90th percentile rise 0.43).
 
+### 3. Over 142 months, the surface's odds of big moves were close to what happened
+
+<a href="docs/img/tails.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/tails.png"><img src="docs/img/tails.gif" alt="Priced and realised chances of NIFTY falling or rising by more than 3, 5 and 10 percent over the next month" width="720"></picture></a>
+
+<a href="docs/img/pit.png"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/img/pit.png"><img src="docs/img/pit.gif" alt="Number of months whose expiry close landed in each tenth of the priced distribution" width="720"></picture></a>
+
+An SVI slice gives the market's whole distribution for the expiry, in closed form: the chance of
+ending below a strike is the price of a digital put, N(−d₂) + n(d₂)·w′(k)/(2√w), and the density
+is Gatheral's g(k) times the lognormal one. For each monthly expiry from January 2015 to November
+2026, the slice about 30 days before it (one a month, so the months don't overlap) is compared with
+the move from that day's forward to the expiry-day close: 142 months, 13 slices refitted first
+with the no-butterfly penalty of finding 2. Every density integrates to 1 within 0.0024 and prices
+the forward within 0.0027. Risk-neutral probabilities include whatever premium investors pay for
+protection, so they need not match real frequencies.
+
+- **Falls were priced about right.** A fall of over 5% was priced at 11.4% and happened in 12.0% of
+  months (17); over 3%, 20.4% against 19.7%. Over 10% was priced at 3.0% and happened twice (1.4%,
+  90% interval 0.3–4.4%).
+- **Rises came a little more often than priced, within chance.** Over 3%: 22.6% priced, 28.2%
+  happened (p 0.13); over 5%: 10.4% against 14.8% (p 0.10). The average move from the forward was
+  +0.22% a month.
+- **Outcomes spread evenly across the priced range.** Each tenth of the priced distribution should
+  catch 14.2 months; the counts ran from 10 to 21 (most in the top tenth), which is within chance
+  (chi-square p 0.49).
+- **The size of moves matched, except for 2020.** Realised moves had a root mean square of 5.16%
+  a month against 4.64% priced at the money; leaving out February–April 2020 (−31.3% from 25
+  February), 4.34% against 4.36%.
+- **The smile beat a flat volatility only slightly.** Its log score was +0.145 a month higher than
+  a lognormal at the at-the-money volatility (t 1.06, better in 56% of months).
+
 ## Quick start
 
 ```bash
@@ -95,7 +125,7 @@ uv run python scripts/fetch_options.py   # NSE bhavcopy 2015 -> today into data/
 uv run python -m iv.build                # SVI per day and expiry -> data/derived/svi_daily.parquet
                                          # and docs/data/lab_surfaces.json
 uv run iv report surface                 # a study's numbers and charts -> out/
-                                         # (topics: surface, arbitrage)
+                                         # (topics: surface, arbitrage, tails)
 uv run python scripts/build_site.py      # surface lab -> site/index.html (committed JSON only)
 uv run pytest
 ```
@@ -125,6 +155,9 @@ Set `IV_LAKE_DIR=/path/to/lake` to take the trading calendar from a local data l
 - `src/iv/arb.py`: the model-free order, spread, butterfly and calendar checks on closing prices
   (with a liquidity floor and an out-of-the-money-only mode), and the SVI refit with a penalty on
   negative g(k).
+- `src/iv/rnd.py`: the risk-neutral distribution from an SVI slice (digital-put CDF and Gatheral
+  density), one slice per monthly expiry about 30 days ahead, and its comparison with the
+  expiry-day close.
 - `src/iv/reports.py`: README findings, reproducible with `iv report <topic>` (India VIX from the
   local lake when `IV_LAKE_DIR` is set).
 - `src/iv/site.py`: the surface lab, one static Plotly page built from the committed JSON alone.
