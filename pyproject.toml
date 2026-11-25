@@ -1,0 +1,39 @@
+[project]
+name = "implied-vol-surface"
+version = "0.1.0"
+description = "The NIFTY implied volatility surface from NSE's daily option bhavcopy, 2015-2026: forwards, SVI fits per expiry, no-arbitrage checks, with a live surface lab."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Dhirajdas18" }]
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.5",
+    "pandas>=3.1.1",
+    "pillow>=13.0.0",
+    "pyarrow>=26.0.1",
+    "scipy>=1.18.1",
+    "yfinance>=1.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "iv"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
