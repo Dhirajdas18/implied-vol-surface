@@ -57,7 +57,11 @@ const SL = $data;
   const dates = SL.dates.slice().reverse();
   el("sl-d").innerHTML = dates.map((d) => `<option value="${d}">${fmtDay(d)}</option>`).join("");
   const fromHash = new URLSearchParams(location.hash.slice(1));
-  el("sl-d").value = SL.slices[fromHash.get("d")] ? fromHash.get("d") : SL.latest;
+  // A linked date the lab doesn't hold snaps to the nearest earlier one it does (ISO dates sort
+  // as text); before the first date, the first; no date, the latest.
+  const wantDate = fromHash.get("d");
+  const snap = !wantDate ? SL.latest : (SL.dates.filter((x) => x <= wantDate).pop() || SL.dates[0]);
+  el("sl-d").value = snap;
   let wantExpiry = fromHash.get("e");
 
   const fillExpiries = () => {
@@ -123,11 +127,14 @@ const SL = $data;
     const xr = [Math.max(75, Math.min(...fam.map((t) => t.x[0]))), Math.min(125, Math.max(...fam.map((t) => t.x[t.x.length - 1])))];
     const inView = fam.flatMap((t) => t.y.filter((_, j) => t.x[j] >= xr[0] && t.x[j] <= xr[1]));
     const yr = [Math.min(...inView), Math.max(...inView)], ypad = 0.08 * (yr[1] - yr[0] || 1);
+    const narrow = el("sl-surf").clientWidth < 600;  // phones: legend under the chart, not beside it
     Plotly.react("sl-surf", fam, Object.assign(base(), {
-      legend: { orientation: "v", x: 1.01, xanchor: "left", y: 1, font: { size: 11 } }, margin: { l: 56, r: 8, t: 16, b: 48 },
+      legend: narrow ? { orientation: "h", x: 0, y: -0.22, yanchor: "top", font: { size: 11 } }
+        : { orientation: "v", x: 1.01, xanchor: "left", y: 1, font: { size: 11 } },
+      margin: { l: 56, r: 8, t: 16, b: narrow ? 64 : 48 },
       shapes: [{ type: "line", yref: "paper", x0: 100, x1: 100, y0: 0, y1: 1, line: { color: mu, width: 1, dash: "dash" } }],
       annotations: [{ x: 100, y: 1, yref: "paper", text: "at the money", showarrow: false, xanchor: "left", yanchor: "top", xshift: 4, font: { size: 11, color: t2 } }],
-      xaxis: axis("strike, % of the forward (zoom out for the far strikes)", { ticksuffix: "%", range: xr }),
+      xaxis: axis(narrow ? "strike, % of the forward" : "strike, % of the forward (zoom out for the far strikes)", { ticksuffix: "%", range: xr }),
       yaxis: axis("implied volatility, %", { ticksuffix: "%", range: [yr[0] - ypad, yr[1] + ypad] }) }), cfg);
     // 3D surface on plain axes: strike % of the forward × days to expiry, a common 85-115% strike
     // range so the sheet is whole (SVI fills untraded strikes there), the chosen expiry in orange.
