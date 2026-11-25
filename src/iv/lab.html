@@ -1,0 +1,157 @@
+<form class="calc" id="sl" onsubmit="return false">
+  <div class="calc-controls">
+    <label>Date <select id="sl-d" name="date" aria-describedby="sl-d-help"></select></label>
+    <label>Expiry <select id="sl-e" name="expiry"></select></label>
+  </div>
+</form>
+<p class="note" id="sl-d-help">Every trading day for about the last year, and the last trading day of each month back to $first.</p>
+<p class="note" id="sl-note" aria-live="polite"></p>
+<dl class="stat-grid" id="sl-stats"></dl>
+<h3>The surface: implied volatility by log-moneyness and days to expiry</h3>
+<div id="sl-surf" class="sim-chart surface" role="img" aria-label="Three-dimensional surface of SVI implied volatility against log-moneyness and days to expiry for the chosen date, drawn over each expiry's quoted range"></div>
+<h3 id="sl-smile-title">The smile</h3>
+<div id="sl-smile" class="sim-chart" role="img" aria-label="Implied volatility against log-moneyness for the chosen expiry: the SVI fit as a line and, for recent dates, the market quotes as points"></div>
+<h3>Term structure: at-the-money volatility</h3>
+<div id="sl-atm" class="sim-chart" role="img" aria-label="At-the-money-forward implied volatility against days to expiry for every fitted expiry on the chosen date"></div>
+<h3>Term structure: skew</h3>
+<div id="sl-skew" class="sim-chart" role="img" aria-label="Skew against days to expiry: the 25-delta risk reversal and the volatility at k = −0.1 minus at k = +0.1"></div>
+<h3>Every expiry on this date</h3>
+<div class="table-scroll"><table class="data" id="sl-table">
+<caption class="note">Volatilities in percent; risk reversal, skew and RMSE in volatility points. (m): a monthly expiry. Forward: from put-call parity, or the futures settlement price (marked “fut.”) where too few strikes traded on both sides. Butterfly: Gatheral’s g(k) below zero somewhere in the quoted range. Calendar: total variance below the previous expiry’s somewhere in the range both quote.</caption>
+<thead><tr><th scope="col">Expiry</th><th scope="col">Days</th><th scope="col">Forward</th><th scope="col">ATM vol</th><th scope="col">25Δ risk reversal</th><th scope="col">Skew ±0.1</th><th scope="col">Fit RMSE</th><th scope="col">Quotes</th><th scope="col">Butterfly</th><th scope="col">Calendar</th></tr></thead>
+<tbody></tbody>
+</table></div>
+<script>
+$js
+const SL = $data;
+(() => {
+  const el = (id) => document.getElementById(id);
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const F = Object.fromEntries(SL.fields.map((f, i) => [f, i]));
+  const DAY = 86400000;
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  const plus = (d, n) => iso(Date.parse(d + "T00:00:00Z") + n * DAY);
+  const fmtDay = (d) => new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const num = (x, d = 2) => (x === null || !Number.isFinite(x)) ? "–" : x.toFixed(d).replace("-", "−");
+  const pct = (x, d = 1) => (x === null || !Number.isFinite(x)) ? "–" : num(100 * x, d) + "%";
+  const pts = (x) => (x === null || !Number.isFinite(x)) ? "–" : num(100 * x, 1) + " pts";
+  const rupees = (x) => x.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  // Unpack one compact slice row into named fields.
+  const slice = (date, row) => {
+    const o = Object.fromEntries(SL.fields.map((f, i) => [f, row[i]]));
+    o.T = o.days / 365;
+    o.expiry = plus(date, o.days);
+    o.p = { a: o.a, b: o.b, rho: o.rho, m: o.m, sigma: o.sigma };
+    o.butterfly = !!(o.flags & SL.flags.butterfly);
+    o.calendar = !!(o.flags & SL.flags.calendar);
+    o.monthly = !!(o.flags & SL.flags.monthly);
+    o.futFwd = !!(o.flags & SL.flags.futures_forward);
+    return o;
+  };
+  const slicesOn = (d) => SL.slices[d].map((r) => slice(d, r));
+
+  const dates = SL.dates.slice().reverse();
+  el("sl-d").innerHTML = dates.map((d) => `<option value="${d}">${fmtDay(d)}</option>`).join("");
+  const fromHash = new URLSearchParams(location.hash.slice(1));
+  el("sl-d").value = SL.slices[fromHash.get("d")] ? fromHash.get("d") : SL.latest;
+  let wantExpiry = fromHash.get("e");
+
+  const fillExpiries = () => {
+    const d = el("sl-d").value, ss = slicesOn(d);
+    const prev = wantExpiry || el("sl-e").value;
+    el("sl-e").innerHTML = ss.map((s) => `<option value="${s.expiry}">${fmtDay(s.expiry)} (${s.days} days${s.monthly ? ", monthly" : ""})</option>`).join("");
+    const keep = ss.find((s) => s.expiry === prev);
+    // Default: the nearest monthly expiry at least a week out, else the nearest expiry.
+    const pick = keep || ss.find((s) => s.monthly && s.days >= 7) || ss[0];
+    el("sl-e").value = pick.expiry;
+    wantExpiry = null;
+  };
+
+  const cfg = { displaylogo: false, responsive: true };
+  const base = () => ({ paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"),
+    font: { family: getComputedStyle(document.body).fontFamily, color: css("--text-2"), size: 12 },
+    margin: { l: 56, r: 16, t: 32, b: 48 }, legend: { orientation: "h", y: 1.02, yanchor: "bottom", x: 0 },
+    hovermode: "closest" });
+  const axis = (title, extra = {}) => Object.assign({ title, gridcolor: css("--grid"), zerolinecolor: css("--grid") }, extra);
+  const ramp = () => [[0, "#cde2fb"], [0.33, "#6da7ec"], [0.66, "#256abf"], [1, "#0d366b"]];
+
+  const update = () => {
+    const d = el("sl-d").value, ss = slicesOn(d);
+    const s = ss.find((x) => x.expiry === el("sl-e").value) || ss[0];
+    history.replaceState(null, "", `#d=${d}&e=${s.expiry}`);
+    const t2 = css("--text-2"), ca = css("--accent"), cb = css("--accent-2"), mu = css("--muted");
+
+    const flags = [s.butterfly ? "butterfly" : "", s.calendar ? "calendar" : ""].filter(Boolean);
+    const stats = [
+      ["Forward", rupees(s.F) + (s.futFwd ? " (fut.)" : "")],
+      ["At-the-money vol", pct(s.atm)],
+      ["25Δ risk reversal", pts(s.rr25)],
+      ["Skew, k = ±0.1", pts(s.skew10)],
+      ["Fit RMSE", num(s.rmse, 2) + " pts"],
+      ["Arbitrage flags", flags.length ? flags.join(", ") : "none"],
+    ];
+    el("sl-stats").innerHTML = stats.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+    const q = (SL.quotes[d] || {})[String(s.days)];
+    el("sl-note").textContent = `${fmtDay(d)}, NIFTY options expiring ${fmtDay(s.expiry)} (${s.days} days): ` +
+      `SVI fitted to ${s.n} out-of-the-money quotes, at-the-money volatility ${pct(s.atm)}, ` +
+      `25-delta risk reversal ${pts(s.rr25)}.` + (q ? "" : " Market quotes are shown for the last 20 trading days only; this date shows the SVI fit alone.");
+
+    // 3D surface: each expiry's SVI slice, drawn only across the k range it has quotes for.
+    const kLo = Math.max(-0.5, Math.min(...ss.map((x) => x.k_lo)));
+    const kHi = Math.min(0.3, Math.max(...ss.map((x) => x.k_hi)));
+    const ks = Array.from({ length: 61 }, (_, i) => kLo + (kHi - kLo) * i / 60);
+    const z = ss.map((x) => ks.map((k) => (k >= x.k_lo - 1e-9 && k <= x.k_hi + 1e-9) ? 100 * sviIv(x.p, k, x.T) : null));
+    const scene = (t) => ({ title: { text: t }, gridcolor: css("--grid"), zerolinecolor: css("--grid"), color: t2, backgroundcolor: css("--surface") });
+    Plotly.react("sl-surf", [{ type: "surface", x: ks, y: ss.map((x) => x.days), z, colorscale: ramp(),
+      connectgaps: false, showscale: true, colorbar: { title: { text: "vol, %" }, thickness: 12, len: 0.6, tickfont: { color: t2 } },
+      hovertemplate: "k %{x:.3f}<br>%{y} days<br>%{z:.1f}%<extra></extra>",
+      contours: { z: { show: false } } }],
+      Object.assign(base(), { margin: { l: 0, r: 0, t: 8, b: 0 },
+        scene: { xaxis: scene("log-moneyness k"), yaxis: scene("days to expiry"), zaxis: scene("implied vol, %"),
+          camera: { eye: { x: -1.6, y: -1.6, z: 0.9 } }, aspectmode: "manual", aspectratio: { x: 1.2, y: 1.2, z: 0.7 } } }), cfg);
+
+    // Smile: SVI over the quoted range (a little beyond, dotted), market quotes as points.
+    const pad = 0.25 * (s.k_hi - s.k_lo);
+    const kk = Array.from({ length: 121 }, (_, i) => s.k_lo - pad + (s.k_hi - s.k_lo + 2 * pad) * i / 120);
+    const inside = kk.map((k) => (k >= s.k_lo && k <= s.k_hi) ? 100 * sviIv(s.p, k, s.T) : null);
+    const traces = [
+      { x: kk, y: kk.map((k) => 100 * sviIv(s.p, k, s.T)), mode: "lines", line: { color: ca, width: 1.2, dash: "dot" }, name: "SVI beyond the quotes", hoverinfo: "skip" },
+      { x: kk, y: inside, mode: "lines", line: { color: ca, width: 2.5 }, name: "SVI fit", customdata: kk.map((k) => s.F * Math.exp(k)),
+        hovertemplate: "k %{x:.3f} (strike %{customdata:,.0f})<br>SVI %{y:.2f}%<extra></extra>" },
+    ];
+    if (q) traces.push({ x: q[0], y: q[1].map((v) => 100 * v), mode: "markers", marker: { color: t2, size: 6, line: { color: css("--surface"), width: 1 } },
+      name: "market (out of the money)", customdata: q[0].map((k) => s.F * Math.exp(k)),
+      hovertemplate: "k %{x:.3f} (strike %{customdata:,.0f})<br>market %{y:.2f}%<extra></extra>" });
+    el("sl-smile-title").textContent = `The smile, ${fmtDay(s.expiry)} expiry` + (q ? ": SVI against the market" : ": SVI fit");
+    Plotly.react("sl-smile", traces, Object.assign(base(), {
+      shapes: [{ type: "line", yref: "paper", x0: 0, x1: 0, y0: 0, y1: 1, line: { color: mu, width: 1, dash: "dash" } }],
+      xaxis: axis("log-moneyness k = ln(strike / forward)"), yaxis: axis("implied volatility, %", { ticksuffix: "%" }) }), cfg);
+
+    // Term structure.
+    const days = ss.map((x) => x.days), pick = ss.map((x) => x === s);
+    const sizes = pick.map((on) => on ? 12 : 7);
+    Plotly.react("sl-atm", [{ x: days, y: ss.map((x) => 100 * x.atm), mode: "lines+markers", line: { color: ca, width: 2 },
+      marker: { size: sizes, color: ca }, name: "at-the-money vol", customdata: ss.map((x) => fmtDay(x.expiry)),
+      hovertemplate: "%{customdata} (%{x} days)<br>%{y:.1f}%<extra></extra>" }],
+      Object.assign(base(), { showlegend: false, xaxis: axis("days to expiry"), yaxis: axis("implied volatility, %", { ticksuffix: "%", rangemode: "tozero" }) }), cfg);
+    Plotly.react("sl-skew", [
+      { x: days, y: ss.map((x) => x.rr25 === null ? null : 100 * x.rr25), mode: "lines+markers", line: { color: ca, width: 2 }, marker: { size: sizes, color: ca },
+        name: "25-delta risk reversal (call − put)", customdata: ss.map((x) => fmtDay(x.expiry)), hovertemplate: "%{customdata}<br>%{y:.2f} pts<extra></extra>" },
+      { x: days, y: ss.map((x) => 100 * x.skew10), mode: "lines+markers", line: { color: cb, width: 2, dash: "dot" }, marker: { size: sizes, color: cb, symbol: "diamond" },
+        name: "vol at k = −0.1 minus at k = +0.1", customdata: ss.map((x) => fmtDay(x.expiry)), hovertemplate: "%{customdata}<br>%{y:.2f} pts<extra></extra>" },
+    ], Object.assign(base(), { xaxis: axis("days to expiry"), yaxis: axis("volatility points"),
+      shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: 0, y1: 0, line: { color: mu, width: 1 } }] }), cfg);
+
+    el("sl-table").tBodies[0].innerHTML = ss.map((x) => `<tr${x === s ? ' class="pick" aria-current="true"' : ""}>` +
+      `<th scope="row">${fmtDay(x.expiry)}${x.monthly ? " (m)" : ""}</th><td>${x.days}</td>` +
+      `<td>${rupees(x.F)}${x.futFwd ? " fut." : ""}</td><td>${pct(x.atm)}</td><td>${num(x.rr25 === null ? null : 100 * x.rr25, 1)}</td>` +
+      `<td>${num(100 * x.skew10, 1)}</td><td>${num(x.rmse, 2)}</td><td>${x.n}</td>` +
+      `<td>${x.butterfly ? "yes" : "no"}</td><td>${x.calendar ? "yes" : "no"}</td></tr>`).join("");
+  };
+  el("sl-d").addEventListener("change", () => { fillExpiries(); update(); });
+  el("sl-e").addEventListener("change", update);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", update);
+  fillExpiries();
+  update();
+})();
+</script>
