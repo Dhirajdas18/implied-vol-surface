@@ -133,14 +133,14 @@ const SL = $data;
     // range so the sheet is whole (SVI fills untraded strikes there), the chosen expiry in orange.
     const xs = Array.from({ length: 41 }, (_, i) => 85 + 30 * i / 40);
     const z3 = s3.map((x) => xs.map((v) => 100 * sviIv(x.p, Math.log(v / 100), x.T)));
-    const hov = s3.map((x) => xs.map((v) => `${fmtDay(x.expiry)} expiry (${x.days} days)<br>strike ${Math.round(x.F * v / 100).toLocaleString("en-IN")} (${v.toFixed(1)}% of forward)`));
     const ax3 = (t, extra = {}) => Object.assign({ title: { text: t }, gridcolor: css("--grid"), zerolinecolor: css("--grid"), color: t2, backgroundcolor: css("--surface"), showspikes: false }, extra);
     const pickRow = s3.indexOf(s);
-    const tr3 = [{ type: "surface", x: xs, y: s3.map((x) => x.days), z: z3, text: hov, colorscale: ramp(), opacity: 0.85,
+    const tr3 = [{ type: "surface", x: xs, y: s3.map((x) => x.days), z: z3, colorscale: ramp(), opacity: 0.85,
       colorbar: { title: { text: "implied vol" }, ticksuffix: "%", thickness: 12, len: 0.6, tickfont: { color: t2 } },
       contours: { x: { show: true, start: 85, end: 115, size: 5, color: css("--surface"), width: 1 },
                   z: { show: true, usecolormap: true, highlightcolor: t2, project: { z: false } } },
-      hovertemplate: "%{text}<br>implied vol %{z:.1f}%<extra></extra>" },
+      // 3D surfaces don't fill %{text} or %{customdata} in hover labels; x, y and z only.
+      hovertemplate: "strike %{x:.1f}% of the forward<br>%{y} days to expiry<br>implied vol %{z:.1f}%<extra></extra>" },
       { type: "scatter3d", mode: "lines", x: s3.map(() => 100), y: s3.map((x) => x.days), z: s3.map((x) => 100 * sviIv(x.p, 0, x.T)),
         line: { color: t2, width: 4, dash: "dash" }, name: "at the money", hoverinfo: "skip" }];
     if (pickRow >= 0) tr3.push({ type: "scatter3d", mode: "lines", x: xs, y: xs.map(() => s.days), z: z3[pickRow].map((v) => v + 0.15),
