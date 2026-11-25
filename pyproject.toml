@@ -16,6 +16,9 @@ dependencies = [
     "yfinance>=1.8.0",
 ]
 
+[project.scripts]
+iv = "iv.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest",
