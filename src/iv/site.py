@@ -40,8 +40,8 @@ def lab_section(d: dict) -> str:
 def method_section(d: dict) -> str:
     return f"""<ul class="plain">
 <li>Data: NSE’s daily F&amp;O bhavcopy, NIFTY index options and futures, {_day(d["first"])} to
-{_day(d["latest"])}. Option prices are closing prices (the day’s last trades); NSE’s settlement
-price column is empty for options in the older files. Only options that traded that day are
+{_day(d["latest"])}. Option prices are closing prices (the day’s last trades), as in
+black-scholes-pricer, not NSE’s settlement prices. Only options that traded that day are
 used, out of the money against the forward (puts below it, calls above), priced above the
 ₹0.05 tick, with 2 to 365 days to expiry.</li>
 <li>Forward: for each expiry, from put-call parity, F = K + e<sup>rT</sup>(C − P), the median

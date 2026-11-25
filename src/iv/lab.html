@@ -7,7 +7,7 @@
 <p class="note" id="sl-d-help">Every trading day for about the last year, and the last trading day of each month back to $first.</p>
 <p class="note" id="sl-note" aria-live="polite"></p>
 <dl class="stat-grid" id="sl-stats"></dl>
-<h3>The surface: implied volatility by log-moneyness and days to expiry</h3>
+<h3>The surface: implied volatility by log-moneyness and days to expiry (expiries a week or more out)</h3>
 <div id="sl-surf" class="sim-chart surface" role="img" aria-label="Three-dimensional surface of SVI implied volatility against log-moneyness and days to expiry for the chosen date, drawn over each expiry's quoted range"></div>
 <h3 id="sl-smile-title">The smile</h3>
 <div id="sl-smile" class="sim-chart" role="img" aria-label="Implied volatility against log-moneyness for the chosen expiry: the SVI fit as a line and, for recent dates, the market quotes as points"></div>
@@ -97,12 +97,14 @@ const SL = $data;
       `25-delta risk reversal ${pts(s.rr25)}.` + (q ? "" : " Market quotes are shown for the last 20 trading days only; this date shows the SVI fit alone.");
 
     // 3D surface: each expiry's SVI slice, drawn only across the k range it has quotes for.
-    const kLo = Math.max(-0.5, Math.min(...ss.map((x) => x.k_lo)));
-    const kHi = Math.min(0.3, Math.max(...ss.map((x) => x.k_hi)));
+    // Expiries under a week are left out: their far wings reach volatilities that flatten the rest.
+    const s3 = ss.filter((x) => x.days >= 7).length >= 2 ? ss.filter((x) => x.days >= 7) : ss;
+    const kLo = Math.max(-0.5, Math.min(...s3.map((x) => x.k_lo)));
+    const kHi = Math.min(0.3, Math.max(...s3.map((x) => x.k_hi)));
     const ks = Array.from({ length: 61 }, (_, i) => kLo + (kHi - kLo) * i / 60);
-    const z = ss.map((x) => ks.map((k) => (k >= x.k_lo - 1e-9 && k <= x.k_hi + 1e-9) ? 100 * sviIv(x.p, k, x.T) : null));
+    const z = s3.map((x) => ks.map((k) => (k >= x.k_lo - 1e-9 && k <= x.k_hi + 1e-9) ? 100 * sviIv(x.p, k, x.T) : null));
     const scene = (t) => ({ title: { text: t }, gridcolor: css("--grid"), zerolinecolor: css("--grid"), color: t2, backgroundcolor: css("--surface") });
-    Plotly.react("sl-surf", [{ type: "surface", x: ks, y: ss.map((x) => x.days), z, colorscale: ramp(),
+    Plotly.react("sl-surf", [{ type: "surface", x: ks, y: s3.map((x) => x.days), z, colorscale: ramp(),
       connectgaps: false, showscale: true, colorbar: { title: { text: "vol, %" }, thickness: 12, len: 0.6, tickfont: { color: t2 } },
       hovertemplate: "k %{x:.3f}<br>%{y} days<br>%{z:.1f}%<extra></extra>",
       contours: { z: { show: false } } }],
